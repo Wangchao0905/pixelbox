@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs'
+import path from 'node:path'
 import { config } from './config.mjs'
 import { ApiError, badRequest } from './http.mjs'
 import { guardImage, guardText } from './security.mjs'
@@ -84,6 +86,11 @@ async function callUpstream({ kind, prompt, model, quality, size, n, inputImages
     throw new ApiError(503, '服务端未配置 LLM_API_KEY，无法生成图片', 'upstream_not_configured')
   }
 
+  // 模型名映射（config.llm.modelMap）：网关渠道侧的模型 ID 可能与公开名
+  // 不一致（如 llm-api.net 要求 -c 后缀）。在这里统一改名，调用方继续用
+  // 公开名；映射表由 LLM_MODEL_MAP 环境变量控制。
+  const upstreamModel = config.llm.modelMap[model] ?? model
+
   const isEdit = kind === 'edit'
   const url = `${config.llm.baseUrl}/v1/images/${isEdit ? 'edits' : 'generations'}`
 
@@ -93,7 +100,7 @@ async function callUpstream({ kind, prompt, model, quality, size, n, inputImages
   if (isEdit) {
     const form = new FormData()
     form.append('prompt', prompt)
-    form.append('model', model)
+    form.append('model', upstreamModel)
     form.append('n', String(n))
     form.append('size', size)
     form.append('quality', quality)
@@ -107,7 +114,7 @@ async function callUpstream({ kind, prompt, model, quality, size, n, inputImages
     body = form
   } else {
     headers['Content-Type'] = 'application/json'
-    body = JSON.stringify({ model, prompt, n, size, quality, ...(background ? { background } : {}) })
+    body = JSON.stringify({ model: upstreamModel, prompt, n, size, quality, ...(background ? { background } : {}) })
   }
 
   let response
@@ -294,9 +301,24 @@ export async function runImageTask({
   }
 }
 
-/** 读取客户端上传的素材（编辑接口用） */
+/** 预设资源 ID：`preset:model-01`。名字只允许小写字母/数字/连字符，防路径穿越。 */
+const PRESET_ID = /^preset:([a-z0-9-]+)$/
+
+/** 读取客户端上传的素材（编辑接口用），或预设资源（preset: 前缀，服务端本地直读） */
 export function loadInputImages(fileIds = []) {
   return fileIds.map((fileId) => {
+    const preset = PRESET_ID.exec(String(fileId ?? ''))
+    if (preset) {
+      // 预设模特（试穿功能）：直接读 presetDir 下的同名 png，不走上传接口中转。
+      // 用户侧无感，也省一次下载+上传的往返。
+      let buffer
+      try {
+        buffer = readFileSync(path.join(config.presetDir, `${preset[1]}.png`))
+      } catch {
+        throw badRequest(`预设模特不存在：${preset[1]}`, 'preset_not_found')
+      }
+      return { buffer, mime: 'image/png', filename: `${preset[1]}.png` }
+    }
     const { record, buffer } = readStored(fileId)
     return { buffer, mime: record.mime, filename: record.originalName }
   })

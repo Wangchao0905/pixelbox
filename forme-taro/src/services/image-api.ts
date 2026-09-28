@@ -16,13 +16,18 @@ import mockF from '@/assets/product-blue-mist-reference.jpg'
 import mockG from '@/assets/product-skincare-portrait-reference.jpg'
 import mockH from '@/assets/product-perfume-cherry-reference.jpg'
 
-export type GeneratedImage = { url: string; revisedPrompt?: string }
+export type GeneratedImage = { url: string; fileId?: string; revisedPrompt?: string }
 
 /** 用户上传的素材：小程序里是本地临时文件路径 */
 export type ImageAsset = {
   name: string
   path: string
   size?: number
+  /**
+   * 服务端已有的 fileId（预设资源用，如 `preset:model-01`）。
+   * 有它时 `editImages` 直接透传，不走上传。path 此时为空。
+   */
+  fileId?: string
 }
 
 /** 生成结果入资产库需要的元信息，不传则不入库 */
@@ -116,7 +121,7 @@ function normalize(payload: any): GeneratedImage[] {
     .map((item: any) => {
       if (typeof item === 'string') return { url: item }
       const url = item?.url ?? (item?.b64_json ? `data:image/png;base64,${item.b64_json}` : '')
-      return { url, revisedPrompt: item?.revised_prompt ?? item?.revisedPrompt }
+      return { url, fileId: item?.fileId, revisedPrompt: item?.revised_prompt ?? item?.revisedPrompt }
     })
     .filter((item: GeneratedImage) => Boolean(item.url))
 }
@@ -212,11 +217,13 @@ export async function editImages(params: EditParams): Promise<GeneratedImage[]> 
     return [...uploaded, ...rest].slice(0, n)
   }
 
-  // 先上传素材拿到 fileId，再带着 fileIds 去生成
-  const uploaded = await Promise.all(
-    params.images.filter((item) => Boolean(item?.path)).map((item) => uploadAsset(item))
+  // 先拿到 fileIds 再去生成。预设资源（fileId 如 preset:model-01）直接透传，
+  // 不走上传；顺序与 params.images 一致，调用方靠这个顺序写提示词里的图一/图二。
+  const fileIds = await Promise.all(
+    params.images.filter(Boolean).map((item) =>
+      item?.fileId ? Promise.resolve(item.fileId) : uploadAsset(item).then((uploaded) => uploaded.fileId)
+    )
   )
-  const fileIds = uploaded.map((item) => item.fileId)
   if (!fileIds.length) throw new Error('请先上传产品图片')
 
   const payload = await postGeneration<any>('/api/edit-image', {

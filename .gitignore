@@ -14,3 +14,10 @@ sync-pack-*.zip
 tomorrow-cover-review.md
 _cutout/
 .keys/
+
+# 本地测试/渲染 scratch，不进仓库
+_idphoto/
+_portrait/
+_promo/
+_promo2/
+_tryon/

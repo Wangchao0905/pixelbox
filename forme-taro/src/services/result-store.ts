@@ -1,4 +1,5 @@
 import type { EditParams, GeneratedImage, GenerateParams } from './image-api'
+import type { PortraitGridCell } from '../package-portrait/data/portrait-themes'
 
 /**
  * 生成结果的中转站
@@ -26,6 +27,16 @@ export type PendingResult = {
   images: GeneratedImage[]
   /** 没有它时结果页不渲染「再来一张」 */
   rerun?: RerunRequest
+  /**
+   * 四宫格选格（目前仅证件照）：结果页渲染 4 个选格按钮，
+   * 用户选一格后按该格表情重新生成全分辨率单张。
+   */
+  gridPick?: {
+    themeId: string
+    /** 生成四宫格时的主题选项（如服装/领带），单张生成时原样带入 */
+    selections: Record<string, string>
+    cells: PortraitGridCell[]
+  }
 }
 
 let pending: PendingResult | null = null

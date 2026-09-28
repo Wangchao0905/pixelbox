@@ -44,6 +44,34 @@ function flag(key, fallback = false) {
 }
 
 /**
+ * 模型名映射表。环境变量 LLM_MODEL_MAP 是 JSON（如
+ * '{"gpt-image-2.5-sunburst":"gpt-image-2.5-sunburst-c"}'）；没配时用
+ * 2026-09-28 实测的 llm-api.net 默认映射。解析失败时退回默认映射，
+ * 不让一次配错的环境变量把所有生图请求打挂。
+ */
+function parseModelMap(raw) {
+  const fallback = {
+    'gpt-image-2.5-sunburst': 'gpt-image-2.5-sunburst-c',
+    'gpt-image-2': 'gpt-image-2-c',
+    'gpt-image-2.5-flare': 'gpt-image-2.5-flare-c'
+  }
+  if (!raw || !raw.trim()) return fallback
+  try {
+    const parsed = JSON.parse(raw)
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      const clean = {}
+      for (const [key, value] of Object.entries(parsed)) {
+        if (typeof value === 'string' && value.trim()) clean[key] = value.trim()
+      }
+      return clean
+    }
+  } catch {
+    // 故意吞掉：见函数头注释
+  }
+  return fallback
+}
+
+/**
  * 运行环境。**必须和别的配置走同一条取值链**（process.env → .env → .env.local）。
  * ------------------------------------------------------------------
  * 这里踩过一个很隐蔽的坑：生产拦截原本全部直接读 `process.env.NODE_ENV`，
@@ -92,6 +120,16 @@ export const config = {
 
   dataDir: path.resolve(ROOT, read('DATA_DIR', 'data')),
 
+  /**
+   * 预设模特图目录（模特试穿功能用）。
+   * ------------------------------------------------------------------
+   * 前端传 fileId `preset:model-01` 时，loadInputImages 直接读这里的
+   * `model-01.png`，不走「下载-上传」中转：省一次往返、用户无感更快。
+   * 图片由 scripts/gen-tryon-models.mjs 生成后部署进来，不进 git
+   *（二进制进仓库会变重，参考封面图 fetch-covers.mjs 的做法）。
+   */
+  presetDir: path.resolve(ROOT, read('PRESET_DIR', 'preset-models')),
+
   mockWechat: flag('MOCK_WECHAT', true),
   mockLlm: flag('MOCK_LLM', true),
   securityMode: read('SECURITY_MODE', 'log'),
@@ -130,7 +168,17 @@ export const config = {
      * 上游超时。必须设：图片生成可能挂住几分钟，
      * 没有超时的话预扣的 hold 会一直占着用户点数，且连接不会释放。
      */
-    timeoutMs: Number(read('LLM_TIMEOUT_MS', '180000'))
+    timeoutMs: Number(read('LLM_TIMEOUT_MS', '180000')),
+    /**
+     * 模型名映射：网关渠道侧的模型 ID 与公开名不一致时用。
+     * ------------------------------------------------------------------
+     * 2026-09-28 用生产 Key 实锤：llm-api.net 的 /v1/models 只返回带 `-c`
+     * 后缀的 ID（gpt-image-2.5-sunburst-c 等），代码与前端默认的无后缀名
+     * （gpt-image-2.5-sunburst）直调必报 model_not_found。
+     * 这里在发往上游前做一次改名，前端与调用方继续用公开名，不用改。
+     * 换网关时改环境变量 LLM_MODEL_MAP（JSON）即可，不用改代码。
+     */
+    modelMap: parseModelMap(read('LLM_MODEL_MAP', ''))
   },
 
   /**

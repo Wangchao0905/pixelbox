@@ -1184,6 +1184,7 @@ page {
   left: 16px;
   display: flex;
   align-items: center;
+  justify-content: center;
   gap: 10px;
   padding: 12px 12px 12px 16px;
   box-sizing: border-box;
@@ -3626,4 +3627,100 @@ button.result-action::after { border: none; }
   color: var(--faint);
   font-size: 15px;
   line-height: 1;
+}
+
+/* ================================================================
+   模特试穿：模特选择横滑条（pages/tryon）
+   ----------------------------------------------------------------
+   8 张预设 + 1 张「上传模特」。卡片 2:3（与预设图比例一致，零裁切），
+   选中态用描边 + 右上勾承担，不靠颜色（与灵感复刻两槽并排同一条规矩）。
+   ================================================================ */
+.tryon-model-rail {
+  width: 100%;
+  margin: 4px -16px 0;
+  padding: 0 16px 4px;
+  white-space: nowrap;
+}
+
+.tryon-model-card {
+  position: relative;
+  display: inline-block;
+  vertical-align: top;
+  width: 108px;
+  margin-right: 10px;
+  padding: 6px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface-2);
+  white-space: normal;
+}
+
+.tryon-model-card:last-child {
+  margin-right: 16px;
+}
+
+.tryon-model-card.is-selected {
+  border-color: var(--signal);
+  border-width: 2px;
+  padding: 5px;
+}
+
+.tryon-model-thumb {
+  display: block;
+  width: 100%;
+  height: 144px;
+  border-radius: 8px;
+  background: var(--surface-3);
+}
+
+.tryon-model-thumb.is-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.tryon-model-plus {
+  color: var(--faint);
+  font-size: 28px;
+  line-height: 1;
+}
+
+.tryon-model-check {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: var(--signal);
+  /* 浅底配浅字会看不见：var(--signal) 是浅色，文字一律配 var(--on-accent) */
+  color: var(--on-accent);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.tryon-model-name {
+  display: block;
+  margin-top: 6px;
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+.tryon-model-desc {
+  display: block;
+  margin-top: 2px;
+  color: var(--faint);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.tryon-model-clear {
+  color: var(--signal);
+  font-size: 12px;
+  padding: 8px 4px;
 }

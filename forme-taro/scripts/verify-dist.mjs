@@ -276,19 +276,20 @@ must(
  *    标题要和页面里 `<AppHeader title='...' />` 的字面量**完全一致**。
  */
 const HEADER_PAGES = [
-  ['assets', '资产库'],
-  ['avatar-gallery', '头像模板'],
-  ['create-avatar', '头像生成'],
-  ['create-freeform', '自由生图'],
-  ['create-marketplace', '电商主图'],
-  ['create-poster', '字段式海报'],
-  ['create-product', '产品替换'],
-  ['create-product-shot', '产品拍摄'],
-  ['create-reference', '灵感复刻'],
-  ['product-gallery', '产品工作室'],
-  ['profile', '我的'],
-  ['result', '生成结果'],
-  ['recharge', '充值中心']
+  ['pages/assets/index', '资产库'],
+  ['pages/avatar-gallery/index', '头像模板'],
+  ['pages/create-avatar/index', '头像生成'],
+  ['pages/create-freeform/index', '自由生图'],
+  ['pages/create-marketplace/index', '电商主图'],
+  ['package-portrait/pages/index', 'AI写真'],
+  ['pages/create-poster/index', '字段式海报'],
+  ['pages/create-product/index', '产品替换'],
+  ['pages/create-product-shot/index', '产品拍摄'],
+  ['pages/create-reference/index', '灵感复刻'],
+  ['pages/product-gallery/index', '产品工作室'],
+  ['pages/profile/index', '我的'],
+  ['pages/result/index', '生成结果'],
+  ['pages/recharge/index', '充值中心']
 ]
 
 /** 转义成 \uXXXX 的形态（压缩器可能这么输出） */
@@ -303,7 +304,7 @@ function escapeRegExp(text) {
 }
 
 for (const [page, title] of HEADER_PAGES) {
-  const pageBundle = join(DIST, 'pages', page, 'index.js')
+  const pageBundle = join(DIST, `${page}.js`)
   const code = existsSync(pageBundle) ? readFileSync(pageBundle, 'utf8') : ''
 
   /**
@@ -323,7 +324,7 @@ for (const [page, title] of HEADER_PAGES) {
   must(
     `${page} 有返回入口`,
     asHeaderCall.test(code) || asHeaderCallEscaped.test(code),
-    `dist/pages/${page}/index.js 里找不到 <AppHeader title="${title}" /> 的调用点。\n` +
+    `dist/${page}.js 里找不到 <AppHeader title="${title}" /> 的调用点。\n` +
       '      custom 模式下微信不提供返回箭头，这个页面会没有出口。\n' +
       '      注意：页面配置里的 navigationBarTitleText 不算数 —— 那个字段在 custom\n' +
       '      模式下不生效，它只是同一个字符串的另一处出现。'

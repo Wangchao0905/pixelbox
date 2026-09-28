@@ -4,6 +4,7 @@ import { useRef, useState } from 'react'
 import { Image, Swiper, SwiperItem, Text, Textarea, View } from '@tarojs/components'
 import Taro from '@tarojs/taro'
 import coverInspirationRecreate from '@/assets/cover-inspiration-recreate.jpg'
+import coverModelTryon from '@/assets/cover-model-tryon.jpg'
 import { PrivacyGate } from '@/components'
 import { avatarTemplates, posterDirections, productReplacementTemplates } from '@/data/prompt-templates'
 import { getAccountBalance, costForImages } from '@/services/account'
@@ -119,6 +120,20 @@ const REFERENCE_CARD: Card = {
 }
 
 /**
+ * 「模特试穿」置顶卡（2026-09-28 新增）。
+ * 与灵感复刻一样是独立页面（`pages/tryon`），不带 query。
+ * 封面 `cover-model-tryon.jpg`（640x960 = 2:3）是真实链路实测产物
+ * （上传服装图 → 试穿），封面即功能演示 —— 与一键抠图封面同一条规矩。
+ */
+const TRYON_CARD: Card = {
+  id: 'model-tryon',
+  name: '模特试穿',
+  skill: 'MODEL TRY-ON',
+  cover: coverModelTryon,
+  url: '/package-tryon/pages/index'
+}
+
+/**
  * 海报方向里置顶的那一个（排在灵感复刻之后）。
  * ⚠️ 只在这里置顶，**不动 `posterDirections` 数组的顺序** —— 那个顺序直接决定
  *    create-poster 页下拉框里的编号，门禁 `check-poster-directions.mjs` 会逐项比对。
@@ -127,6 +142,7 @@ const POSTER_PIN_ID = 'food-type'
 
 const LEAD_CARDS: Card[] = [
   REFERENCE_CARD,
+  TRYON_CARD,
   ...posterCards.filter((card) => card.id === POSTER_PIN_ID)
 ]
 
@@ -153,6 +169,8 @@ const CARDS: Card[] = [
 const QUICK_ACTIONS = [
   { label: '自由生图', hint: '一句描述开始', path: '/pages/create-freeform/index', mark: '✦' },
   { label: '灵感复刻', hint: '借参考图的一部分', path: '/pages/create-reference/index', mark: '⧉' },
+  { label: 'AI写真', hint: '上传自拍出大片', path: '/package-portrait/pages/index', mark: '◍' },
+  { label: '模特试穿', hint: '服装一键上身', path: '/package-tryon/pages/index', mark: '◈' },
   { label: '海报', hint: '选一个构图', path: '/pages/create-poster/index', mark: '▤' },
   { label: '产品图', hint: '上传产品照片', path: '/pages/product-gallery/index', mark: '◒' },
   { label: '头像', hint: '制作头像图标', path: '/pages/avatar-gallery/index', mark: '◉' }
@@ -283,7 +301,7 @@ export default function Home() {
       }
     >
       <View className='hd-topline'>
-        <Text className='hd-brand'>像素盒子</Text>
+        <Text className='hd-brand'>Pixel Box</Text>
         <View
           className='hd-avatar'
           hoverClass='press-dim'

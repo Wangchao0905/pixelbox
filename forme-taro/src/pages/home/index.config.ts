@@ -1,4 +1,4 @@
 export default definePageConfig({
-  navigationBarTitleText: '像素盒子',
+  navigationBarTitleText: 'Pixel Box',
   enablePullDownRefresh: false
 })

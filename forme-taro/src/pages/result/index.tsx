@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useState, type PropsWithChildren } from 'react'
 import { Button, Image, Text, View } from '@tarojs/components'
 import Taro, { useShareAppMessage, useShareTimeline } from '@tarojs/taro'
-import { AppHeader, PrivacyGate } from '@/components'
+import { AppHeader, OptionPills, PrivacyGate } from '@/components'
 import { editImages, generateImages, saveImageToAlbum } from '@/services/image-api'
 import { aigcBadgeText, costForImages } from '@/services/account'
 import { shortfallOf } from '@/services/api-error'
-import { BATCH_SIZE } from '@/data/catalog'
+import { BATCH_SIZE, defaultConfigForRatio } from '@/data/catalog'
+import { portraitThemeById } from '@/package-portrait/data/portrait-themes'
 import { rememberResult } from '@/services/history'
 import { setReferenceDraft } from '@/services/reference-images'
 import { setPendingResult, takePendingResult } from '@/services/result-store'
@@ -53,6 +54,74 @@ export default function Result() {
   const [selectedIndex, setSelectedIndex] = useState(0)
   const [saving, setSaving] = useState(false)
   const [rerunning, setRerunning] = useState(false)
+
+  /**
+   * 四宫格选格放大（目前仅证件照）。
+   * ------------------------------------------------------------------
+   * 流程：四宫格是**一张图**，直接裁格子只有一半分辨率（512px），打印会糊；
+   * 所以「放大」= 按编号重新生成一张全分辨率单张 —— 多花 1 张的点数，
+   * 但清晰度是满的。
+   * 对应关系靠编号硬锁定：四宫格生成时每个格子左上角已标白色编号
+   * （1=左上、2=右上、3=左下、4=右下），放大时把四宫格本身作为第二张
+   * 参考图传给模型，提示词点名取该编号的格子 —— 模型能直接看到选中的格子，
+   * 比纯文字描述表情对应得更准。第一张输入仍是用户自拍（身份基准）。
+   * 服务端存着四宫格原文件，用 fileId 直接引用，不走下载再上传。
+   */
+  const gridPick = result?.gridPick
+  const gridTheme = gridPick ? portraitThemeById(gridPick.themeId) : undefined
+  const canEnlarge = Boolean(gridPick && gridTheme?.buildSinglePrompt && result?.rerun)
+  const [cellIndex, setCellIndex] = useState(0)
+  const [enlarging, setEnlarging] = useState(false)
+
+  const handleEnlarge = async () => {
+    if (!canEnlarge || !gridPick || !gridTheme?.buildSinglePrompt || !result?.rerun || enlarging) return
+    setEnlarging(true)
+    try {
+      const base = result.rerun.kind === 'edit' ? result.rerun.params : null
+      const selfie = base?.images?.[0]
+      const gridFileId = variants[0]?.fileId
+      if (!base || !selfie) throw new Error('无法重建生成请求')
+      if (!gridFileId) throw new Error('找不到四宫格原图，请重新生成')
+      const prompt = gridTheme.buildSinglePrompt(gridPick.selections, cellIndex)
+      const params = {
+        ...base,
+        prompt,
+        // 单张用 2:3 竖构图：标准证件照比例，比正方形更适合保存打印
+        size: defaultConfigForRatio('2:3').size,
+        n: 1,
+        // 第一张 = 自拍（身份基准），第二张 = 四宫格（编号选格基准）；
+        // 有 fileId 时服务端直接读存档，不走上传
+        images: [selfie, { name: 'grid-ref', path: '', fileId: gridFileId }]
+      }
+      const images = await editImages(params)
+      setPendingResult({
+        templateId: result.templateId,
+        title: result.title,
+        skill: `${result.skill} · ${gridPick.cells[cellIndex]?.label ?? ''}`,
+        images,
+        rerun: { kind: 'edit', params }
+      })
+      Taro.redirectTo({ url: '/pages/result/index' })
+    } catch (cause) {
+      const need = shortfallOf(cause, costForImages(1))
+      if (need != null) {
+        const answer = await Taro.showModal({
+          title: '点数不足',
+          content: `放大单张还需 ${need} 点，去充值？`,
+          confirmText: '去充值',
+          cancelText: '再想想'
+        })
+        if (answer.confirm) Taro.navigateTo({ url: '/pages/recharge/index' })
+      } else {
+        Taro.showToast({
+          title: cause instanceof Error ? cause.message : '生成失败，请重试',
+          icon: 'none'
+        })
+      }
+    } finally {
+      setEnlarging(false)
+    }
+  }
 
   /**
    * 分享（好友 + 朋友圈）：小程序原生能力。
@@ -196,8 +265,12 @@ export default function Result() {
   return (
     <ResultShell>
       <View className='result-intro result-page-head'>
-        <Text className='result-overline'>{multiple ? `${variants.length} 张作品` : '作品已生成'}</Text>
-        <View className='h2'>{multiple ? '挑一张继续创作' : '保存它，或用它继续创作'}</View>
+        <Text className='result-overline'>
+          {gridPick ? '四宫格已生成' : multiple ? `${variants.length} 张作品` : '作品已生成'}
+        </Text>
+        <View className='h2'>
+          {gridPick ? '选一格，放大成高清单张' : multiple ? '挑一张继续创作' : '保存它，或用它继续创作'}
+        </View>
         <Text className='result-copy'>
           {result?.title} · {result?.skill}
         </Text>
@@ -258,6 +331,36 @@ export default function Result() {
               ) : null}
             </View>
           ))}
+        </View>
+      ) : null}
+
+      {/* 四宫格选格：4 个编号按钮 + 放大生成。裁格子只有 512px 会糊，
+          所以放大 = 按编号从四宫格里取出该格，重出一张全分辨率单张（多花 1 张的点）。 */}
+      {canEnlarge && gridPick ? (
+        <View className='result-grid-pick'>
+          <OptionPills
+            label='选择编号'
+            value={String(cellIndex)}
+            options={gridPick.cells.map((cell, index) => ({
+              value: String(index),
+              label: `${index + 1} ${cell.label}`
+            }))}
+            showSelectedMark
+            onChange={(value) => setCellIndex(Number(value))}
+          />
+          <View
+            className={`primary-cta result-enlarge ${enlarging ? 'is-disabled' : ''}`}
+            hoverClass={enlarging ? 'none' : 'is-pressed'}
+            onClick={handleEnlarge}
+          >
+            {enlarging ? <View className='spinner' /> : null}
+            <Text>
+              {enlarging ? '生成中…' : `放大第 ${cellIndex + 1} 格（${costForImages(1)} 点）`}
+            </Text>
+          </View>
+          <Text className='result-grid-note'>
+            按编号从四宫格中取出该格，生成全分辨率单张，身份保持不变。
+          </Text>
         </View>
       ) : null}
 

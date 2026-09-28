@@ -171,3 +171,27 @@ sudo ln -sf /etc/nginx/sites-available/forme /etc/nginx/sites-enabled/
 | `_stage/patch-nginx-media.py` | 带断言的补丁器：幂等护栏 + 锚点唯一性 + 长度增量断言 + 原子落盘；4 项对抗测试全拦住且**失败不产出文件** |
 | `_stage/verify-media-base.mjs` | 独立验证产物 `mediaBase` 与 env 同源，并算出运行时真实请求地址 |
 | `_stage/falsify-media-base.mjs` | 假破坏自检：证明那条判据不是恒真装饰品 |
+
+---
+
+## 3. 模特试穿预设图部署（2026-09-28 待执行）
+
+> 背景：这台虚拟机直连服务器的 SSH 被出口代理掐了（22 端口能通，握手即被关），
+> 且密钥不在本机 —— 09-23 那次是王的电脑传的。所以这次只能把文件摆好，
+> 等下次服务端部署（¥15 道具上架那次）时一起传。
+>
+> 2026-09-28 15:00 更新：缩略图改成本地打包进小程序（`src/assets/tryon-models/`，
+> 8 张共 57KB），不再走 CDN —— 远程 404 在深色主题下是黑块，已踩过坑。
+> 所以**只需要传 8 张原图 PNG**。
+
+| 文件 | 本地位置 | 服务器目标 | 用途 |
+|---|---|---|---|
+| `model-01.png` … `model-08.png` | `deploy/preset-models/` | 解包目录下的 `preset-models/`（与 `config.presetDir` 默认一致） | 服务端 `preset:model-0X` 本地直读 |
+
+部署命令（在有 SSH 的机器上）：
+```bash
+# 预设原图 → 服务端解包目录（示例：/opt/forme/forme-server/preset-models/，以实际解包路径为准）
+tar -czf preset-models.tar.gz -C deploy preset-models
+scp preset-models.tar.gz ubuntu@pixeltoy.cn:/tmp/ && ssh ubuntu@pixeltoy.cn \
+  "tar -xzf /tmp/preset-models.tar.gz -C /opt/forme/forme-server/"
+```

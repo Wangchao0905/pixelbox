@@ -15,6 +15,23 @@ export default defineAppConfig({
     'pages/recharge/index',
     'pages/profile/index'
   ],
+  /**
+   * 分包：主包 2MB 红线（微信限制的是源码包体积）。
+   * 2026-09-28 模特试穿是第一个分包 —— 8 张模特缩略图（57KB）只被试穿页用，
+   * 放分包里，主包回到 2MB 以内。以后新增的重资源页面也照此办理。
+   * 同日 AI 写真是第二个分包 —— 5 张主题样片（52KB）把主包顶到 2070KB 超限，
+   * 整页搬进 package-portrait，主包回到 2MB 以内。
+   */
+  subPackages: [
+    {
+      root: 'package-tryon',
+      pages: ['pages/index']
+    },
+    {
+      root: 'package-portrait',
+      pages: ['pages/index']
+    }
+  ],
   window: {
     backgroundTextStyle: 'light',
     /**
@@ -41,7 +58,7 @@ export default defineAppConfig({
      */
     navigationStyle: 'custom',
     navigationBarBackgroundColor: '#050505',
-    navigationBarTitleText: '像素盒子',
+    navigationBarTitleText: 'Pixel Box',
     navigationBarTextStyle: 'white',
     backgroundColor: '#050505'
   },
