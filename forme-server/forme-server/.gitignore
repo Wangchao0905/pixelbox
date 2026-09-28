@@ -1,0 +1,14 @@
+# 运行时数据：账户、订单、上传文件、mock 图片
+data/
+
+# 本地密钥，绝不能提交
+.env.local
+.env
+
+# 封面图下载产物（deploy/fetch-covers.mjs 生成，rsync 到服务器即可）
+# 不提交的原因：几十张二进制图会让仓库变重，而且它们由脚本可重复地生成 ——
+# 需要时跑一次 npm run fetch:covers 就有，没必要进版本库。
+deploy/media/
+
+node_modules/
+*.log

@@ -1,0 +1,19 @@
+node_modules/
+dist/
+.temp/
+.rn_temp/
+*.log
+.DS_Store
+.swc/
+
+# 本机 safe-delete 保护会拦 rm -rf，清 dist 时先 mv 到这里（可直接整个删掉）
+.build-trash/
+
+# 本地环境覆盖（个人机器专用，不要提交）
+# .env.local 会同时影响 dev 与 prod 构建，容易误把 localhost 打进生产包，
+# 所以个人覆盖请优先用 .env.development.local
+.env.local
+.env.*.local
+
+# 微信开发者工具的本地私有配置（含个人偏好、编译模式等）
+project.private.config.json

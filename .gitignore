@@ -1,0 +1,15 @@
+node_modules/
+dist/
+build/
+output/
+ui-preview/
+.env
+.env.local
+*.log
+.DS_Store
+# 非代码杂物
+*.tar.gz
+preview-qrcode.jpg
+sync-pack-*.zip
+tomorrow-cover-review.md
+_cutout/

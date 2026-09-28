@@ -1,0 +1,29 @@
+{
+  "name": "forme-server",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Pixel Box 微信小程序后端：登录、图片生成与扣费、资产库、微信虚拟支付",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "node src/index.mjs",
+    "init:data": "node scripts/init-data.mjs",
+    "dev": "node --watch src/index.mjs",
+    "smoke": "node scripts/smoke.mjs",
+    "check:aigc": "node scripts/aigc-check.mjs",
+    "check:holds": "node scripts/check-orphan-holds.mjs",
+    "check:store": "node scripts/check-store-safety.mjs",
+    "check:backup": "node scripts/check-backup.mjs",
+    "check:payment": "node scripts/check-payment-contract.mjs",
+    "check:alert": "node scripts/check-alert.mjs",
+    "check:test-payment": "node scripts/check-test-payment.mjs",
+    "test:alert": "node scripts/test-alert.mjs",
+    "check": "npm run check:aigc && npm run check:holds && npm run check:store && npm run check:backup && npm run check:payment && npm run check:alert && npm run check:test-payment && npm run smoke",
+    "preflight": "node scripts/preflight.mjs",
+    "check:adversarial": "node scripts/adversarial-preflight.mjs",
+    "fetch:covers": "node deploy/fetch-covers.mjs",
+    "check:media": "node scripts/check-media.mjs"
+  }
+}

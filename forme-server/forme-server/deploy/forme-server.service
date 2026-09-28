@@ -1,0 +1,83 @@
+# Pixel Box 服务端 systemd 单元
+# ==================================================================
+# 安装：
+#   sudo cp deploy/forme-server.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now forme-server
+#
+# 查看日志：  journalctl -u forme-server -f
+# 重启服务：  sudo systemctl restart forme-server
+# 回滚版本：  sudo systemctl stop forme-server
+#             （切回旧代码目录后）sudo systemctl start forme-server
+# ==================================================================
+
+[Unit]
+Description=Pixel Box 微信小程序后端
+Documentation=file:/opt/forme/forme-server/DEPLOY.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+
+# ⚠️ 改成你服务器上的实际路径
+WorkingDirectory=/opt/forme/forme-server
+
+# 用非 root 账号跑。这个服务对外的攻击面包括上传解析与图片处理，
+# 一旦被攻破，root 权限意味着整台机器失守。
+User=forme
+Group=forme
+
+# 只用 node:http，没有任何 npm 依赖，所以直接起即可，不需要 pm2
+ExecStart=/usr/bin/node src/index.mjs
+
+# NODE_ENV=production 是**必须的**：
+# 启动自检只在 production 下拦截 MOCK_WECHAT=1 / SECURITY_MODE=log 这类
+# 会导致线上事故的配置。漏了它，演示配置会被当成正式配置跑起来。
+Environment=NODE_ENV=production
+
+# 其余配置一律走 .env.local（含密钥，权限 600）。
+# 不要在这里写 Environment=WECHAT_APP_SECRET=...，
+# unit 文件通常全局可读，等于把密钥公开。
+
+# 崩溃自动重启。restart 间隔给 5 秒，避免配置错误时疯狂重启刷爆日志
+Restart=always
+RestartSec=5
+
+# 优雅退出：应用收到 SIGTERM 后会停收新连接、把内存数据落盘再退出。
+# ------------------------------------------------------------------
+# ⚠️ 这个 15 秒**不是**在等出图跑完。出图最长可以跑到 LLM_TIMEOUT_MS
+#    （默认 180 秒），而应用内部的 SHUTDOWN_GRACE_MS 默认只有 5 秒，
+#    所以发布时在飞的出图请求基本都会被砍掉——这是有意的取舍，
+#    等满 180 秒才能发布是不可接受的。
+#
+#    被砍掉的请求会留下一个「孤儿预扣」（钱已从用户余额扣掉、但没结算），
+#    由下次启动时的 reclaimOrphanHolds 自动退还并告警，不会资损。
+#
+#    想改成「排空再退出」：把 SHUTDOWN_GRACE_MS 和这里的 TimeoutStopSec
+#    一起调大（TimeoutStopSec 必须更大，否则 systemd 会先 SIGKILL）。
+KillSignal=SIGTERM
+TimeoutStopSec=15
+
+# 日志走 journald，由 systemd 自动轮转，不需要自己管日志文件
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=forme-server
+
+# ---------------------------------------------------------------
+# 权限收窄
+# ---------------------------------------------------------------
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+# ProtectSystem=strict 会把整个文件系统挂成只读，
+# 所以必须把数据目录显式放行，否则写 state.json 会失败。
+ReadWritePaths=/opt/forme/forme-server/data
+
+[Install]
+WantedBy=multi-user.target

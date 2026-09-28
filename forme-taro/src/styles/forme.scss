@@ -1,0 +1,3629 @@
+/**
+ * FORMÉ 设计系统
+ * ------------------------------------------------------------------
+ * 真源：work/visual-studio/src/prototype.css（已通过 Design QA）
+ * 迁移约定：
+ *  1. designWidth = 393，源码里的 px 数值与原型 1:1 一致，Taro 自动换算 rpx。
+ *  2. 原型里的 <button>/<input>/<select> 在小程序里换成 View + Picker，
+ *     因此选择器全部改为类名驱动，不再依赖标签选择器。
+ *  3. color-mix() 在小程序 WebView 上不可靠，方案卡的强调色改用
+ *     数据层预先算好的 rgba（见 data/recharge.ts）。
+ *  4. :hover 在小程序无效，按下反馈统一走 hover-class="is-pressed"。
+ */
+
+/* ============================================================
+   0. 动效系统（2026-09-26 UI 优化）
+   ============================================================ */
+/* ⚠️ 这个关键帧**不许出现 transform**（2026-09-27 实测踩坑）。
+   `.page-enter` 挂在页面根 `.app-screen` 上，而 `.bottom-nav` /
+   `.generate-dock` / `.privacy-mask` 都是 `position: fixed` 且是它的后代。
+   CSS Transforms 规范：祖先的 transform 只要不是 `none`，
+   就成为 fixed 后代的**包含块**。而 `animation-fill-mode: both`
+   会把 `to` 状态的 `translateY(0)` 永久留在根节点上
+   （实测计算值 `matrix(1, 0, 0, 1, 0, 0)`）。后果：底导与生成条被钉在
+   **内容底部**而不是屏幕底部 —— 测得滚 0 时底导在视口 y=1279
+   （视口仅 844），首屏完全看不见，而所有产物门禁全绿。
+   动效改为纯 opacity：位置正确性优先于 8px 上浮。 */
+@keyframes pageEnter {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.page-enter {
+  animation: pageEnter 200ms cubic-bezier(0.22, 0.61, 0.36, 1) both;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 0.3; }
+  50% { opacity: 0.6; }
+}
+
+.skeleton-pulse {
+  animation: pulse 1.5s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+.spinner {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  border: 2px solid rgba(244, 244, 239, 0.22);
+  border-top-color: var(--ink);
+  border-radius: 50%;
+  animation: spin 0.6s linear infinite;
+}
+
+/* ============================================================
+   1. 令牌
+   ============================================================ */
+page {
+  /* ⚠️ 本块（第一个 page{}）只放**非颜色**令牌。
+     8 个颜色令牌原先在这里 —— `--ink` `--muted` `--line` `--lime` `--bg`
+     `--surface` `--surface-2` `--surface-3` —— 但被下面第二个 `page{}`（深色皮肤块）
+     整块覆盖：两块选择器与特异性完全相同，后写的赢 ⇒ 那 8 条是**死代码**，
+     2026-09-27 已删（删前删后观感一致，因为是死声明）。
+     🔴 **新增颜色令牌一律加在第二个 `page{}` 块里**（搜索「深色皮肤」）。
+        加在这里会被静默覆盖 —— 不报错、不红、只是颜色不生效。
+     （门禁：`test-creator-ui.mjs` 断言同一个令牌名全文件只定义一次。） */
+  --safe-b: env(safe-area-inset-bottom);
+  /* 顶部安全区。**必须由 JS 注入真实值**（services/system.ts 的 statusBarHeight），
+     不能用 env(safe-area-inset-top)：安卓上状态栏不是 CSS 安全区，env() 给 0，
+     内容会压到时钟上，而且只在真机可见。默认 0 是给「还没注入」兜底。 */
+  --safe-t: 0px;
+  /* 微信胶囊在屏幕右侧占掉的宽度（px）。**必须由 JS 注入真实值**
+     （services/system.ts 的 capsuleInsetRight），默认 0 是给「还没注入」兜底。
+     两个消费点：`.hd-topline` 的 padding-right、`.header-title` 的 max-width。
+
+     ⚠️ 这个令牌**不能删**，但要分清两种「坏」——它们都**不报错**，程度不同：
+       · 令牌在、JS 没注入 ⇒ padding-right 算成 calc(20px + 0px) = 20px。
+         **声明是生效的**，只是没让位 ⇒ 头像被胶囊压住（2026-09-22 实测）。
+       · 令牌被删 ⇒ var(--capsule-r) 解析不到，**整条声明在计算值阶段失效**、
+         退回初始值（padding-right 变 0，max-width 变 none）⇒ 让位和封顶一起没了。
+     所以它必须是「有兜底值的令牌」，不能改成可选变量。 */
+  --capsule-r: 0px;
+  /* 首页顶栏的水平内边距。**必须是令牌，不能把 20px 写进 calc 里**：
+     胶囊让位要写成 `calc(var(--topline-pad) + var(--capsule-r))`，
+     而 Taro 会把 px 转成 rpx —— `calc(20px + var(--capsule-r))` 编译后是
+     `calc(38.16794rpx + var(--capsule-r))`，postcss-calc 认不出 rpx 这个单位
+     （UNKNOWN_DIMENSION），构建时会**多出一条警告**。
+     警告本身不致命（声明会原样保留），但它会淹没真正的问题 ——
+     2026-09-22 就是这么发现这两条新警告的。 */
+  --topline-pad: 20px;
+  /* 顶栏标题两侧预留的宽度（左「✕」按钮 36px + 间隙 16px，两侧对称）。
+     同上：写进 calc 会变成 rpx 触发警告，所以收成令牌。 */
+  --header-title-inset: 104px;
+  /* 固定条与内容留白的尺寸全部收进变量：
+     calc() 里只出现 var()，避免 css 压缩器对「var + 字面量」的 calc 报解析警告 */
+  --dock-h: 92px;
+  --dock-pad: 13px;
+  --dock-gap: 26px;
+  --nav-h: 70px;
+  --nav-pad: 8px;
+  --nav-gap: 24px;
+  --header-h: 54px;
+  --page-pad: 18px;
+  --page-pad-b: 28px;
+  --privacy-pad: 20px;
+  --home-top-pad: 15px;
+
+  /* 部分开发者工具模拟器不会把 CSS 变量继承到 Text，保留字面量兜底。 */
+  background: #101212;
+  background: var(--bg);
+  color: #f4f4ef;
+  color: var(--ink);
+  /* 完整字体栈：brandFontBase 未配置或加载失败时自动回落到系统字体 */
+  font-family: 'Space Grotesk', -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Helvetica Neue', 'Source Han Sans SC', sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ============================================================
+   2. 排版原子
+   ============================================================ */
+.eyebrow {
+  color: #858a87;
+  font-family: 'DM Mono', 'SF Mono', Menlo, Consolas, monospace;
+  font-size: 10px;
+  line-height: 1.2;
+  font-weight: 500;
+  letter-spacing: 0.13em;
+  text-transform: uppercase;
+}
+
+.h1 {
+  max-width: 340px;
+  margin-top: 14px;
+  font-size: 39px;
+  line-height: 1.02;
+  font-weight: 600;
+  letter-spacing: -0.065em;
+}
+
+.h2 {
+  margin-top: 7px;
+  font-size: 22px;
+  line-height: 1;
+  font-weight: 600;
+  letter-spacing: -0.045em;
+}
+
+.h3 {
+  margin-top: 6px;
+  font-size: 16px;
+  line-height: 1.05;
+  font-weight: 600;
+  letter-spacing: -0.03em;
+}
+
+.accent {
+  color: var(--lime);
+}
+
+.mono {
+  font-family: 'DM Mono', 'SF Mono', Menlo, Consolas, monospace;
+}
+
+/* ============================================================
+   3. 屏幕与滚动容器
+   ============================================================ */
+.app-screen {
+  min-height: 100%;
+  background: #101212;
+  background: var(--bg);
+  color: #f4f4ef;
+  color: var(--ink);
+}
+
+.page-pad {
+  padding: calc(var(--page-pad) + var(--safe-t)) var(--page-pad) calc(var(--page-pad-b) + var(--safe-b));
+}
+
+.has-dock {
+  padding-bottom: calc(var(--dock-h) + var(--safe-b) + var(--dock-gap));
+}
+
+.has-nav {
+  padding-bottom: calc(var(--nav-h) + var(--safe-b) + var(--nav-gap));
+}
+
+/* 顶部栏
+   ------------------------------------------------------------------
+   navigationStyle: 'custom' 之后微信不再画导航栏，这条由我们自己画。
+   全屏 = 背景一直铺到屏幕最上沿，所以：
+     · 高度 = 状态栏让位（--safe-t，由 AppHeader 内联注入）+ 视觉高度 54px
+     · box-sizing: border-box —— 让位算在高度里，内容区始终是 54px
+   负外边距抵掉 .page-pad 的内边距，让顶栏通栏贴到屏幕最上沿
+   （与原型 .app-header 的 54px / 16px 内边距 1:1）。 */
+.app-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: calc(var(--header-h) + var(--safe-t));
+  margin: -18px -18px var(--page-pad);
+  padding: var(--safe-t) 16px 0;
+  box-sizing: border-box;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+  background: var(--bg);
+}
+
+.header-back,
+.header-side {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  color: #bcc1bc;
+  font-size: 13px;
+}
+
+.header-back {
+  background: var(--surface-2);
+}
+
+.header-back.is-pressed {
+  opacity: 0.72;
+}
+
+/* 标题封顶：不许伸进微信胶囊的领地
+   ------------------------------------------------------------------
+   胶囊实测占 x306..384 / y58..81（393 宽屏），竖直方向正好落在顶栏那一行里。
+   顶栏是 space-between，右侧是**空白占位**，所以胶囊压上去没有视觉损失；
+   真正要防的是「哪天有人加了个长标题」—— 标题是居中的，长了会先撞到右边，
+   滑到胶囊底下（那里既看不清也点不到，而且只有真机/特定机型才复现）。
+
+   算式：100% 是顶栏内容宽（屏宽 - 左右各 16px padding）；
+         再减去左右两个 36px 按钮位（各留 52px = 36 + 间隙）
+         和右侧胶囊让位 --capsule-r。
+   ⚠️ --capsule-r 在令牌块里有 0px 兜底，所以即使 JS 没注入也不会让这条
+      声明静默失效（失效的话 max-width 变 none，等于这道闸没了，且不报错）。
+   当前最长标题 5 字 ≈ 80px，离封顶还差一半 ⇒ **今天不改变任何渲染**。 */
+.header-title {
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  max-width: calc(100% - var(--header-title-inset) - var(--capsule-r));
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ============================================================
+   4. 通用控件
+   ============================================================ */
+.primary-cta {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 9px;
+  /* 深空仪器：主按钮统一胶囊形；动效曲线换成稳的 ease-out，回弹曲线停用。 */
+  border-radius: 999px;
+  background: var(--lime);
+  color: #101212;
+  font-size: 13px;
+  font-weight: 700;
+  transition: transform 220ms var(--ease-out),
+              background 120ms ease-out,
+              opacity 120ms ease-out;
+}
+
+.primary-cta.is-pressed {
+  opacity: 0.86;
+  transform: scale(0.96);
+}
+
+/* 深空仪器：生成中时按钮边缘极淡呼吸光 —— 科技感靠克制，不靠闪。
+   2.4s 一次，只在 is-loading 时播，停掉就是普通按钮。 */
+@keyframes cta-breathe {
+  0%, 100% { box-shadow: 0 0 0 rgba(94, 234, 212, 0); }
+  50% { box-shadow: 0 0 22px rgba(94, 234, 212, 0.16); }
+}
+
+.primary-cta.is-loading {
+  animation: cta-breathe 2.4s ease-in-out infinite;
+}
+
+.primary-cta.is-disabled {
+  opacity: 0.62;
+}
+
+.secondary-button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 46px;
+  border: 1px solid #3a403e;
+  border-radius: 10px;
+  background: var(--surface-2);
+  color: #c7ccc5;
+  font-size: 12px;
+  transition: transform 150ms cubic-bezier(0.34, 1.56, 0.64, 1),
+              background 100ms ease-out,
+              opacity 100ms ease-out;
+}
+
+.secondary-button.is-pressed {
+  background: #232827;
+  transform: scale(0.96);
+}
+
+.text-button {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  color: #9aa09c;
+  font-size: 11px;
+}
+
+.icon-button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: #1e2222;
+  color: #bcc1bc;
+  font-size: 15px;
+}
+
+.press-dim.is-pressed {
+  opacity: 0.72;
+}
+
+/* ============================================================
+   5. 首页
+   ============================================================ */
+.home-content {
+  min-height: 100%;
+}
+
+.topline {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.brand-lockup {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  color: #f5f5ee;
+  font-size: 14px;
+  line-height: 1;
+  font-weight: 600;
+  letter-spacing: 0.18em;
+}
+
+.brand-mark {
+  color: var(--lime);
+  font-size: 19px;
+}
+
+.top-actions {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+
+.credit-pill {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 7px 10px;
+  border: 1px solid #303535;
+  border-radius: 999px;
+  color: #c5c8c3;
+  font-family: 'DM Mono', 'SF Mono', Menlo, monospace;
+  font-size: 11px;
+  line-height: 1;
+  font-weight: 500;
+}
+
+.credit-pill .credit-icon {
+  color: var(--lime);
+  font-size: 11px;
+}
+
+.avatar {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border: 1px solid #424746;
+  border-radius: 50%;
+  background: #222727;
+  color: #e7e9e4;
+  font-size: 11px;
+}
+
+.hero-block {
+  padding: 50px 0 38px;
+}
+
+.hero-block .hero-copy {
+  max-width: 285px;
+  margin-top: 19px;
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1.55;
+}
+
+.hero-actions {
+  display: block;
+}
+
+.hero-cta {
+  width: 100%;
+  min-height: 52px;
+  margin-top: 26px;
+  padding: 0 18px;
+  box-sizing: border-box;
+  font-size: 14px;
+}
+
+.hero-cta-arrow {
+  margin-left: auto;
+  font-size: 20px;
+  line-height: 1;
+}
+
+.hero-meta {
+  display: block;
+  margin-top: 11px;
+  color: #6f7772;
+  font-family: 'DM Mono', 'SF Mono', Menlo, monospace;
+  font-size: 9px;
+  text-align: center;
+}
+
+.section-block {
+  margin-top: 9px;
+}
+
+.section-heading {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.section-caption {
+  color: #7f8981;
+  font-family: 'DM Mono', 'SF Mono', Menlo, monospace;
+  font-size: 10px;
+  letter-spacing: 0.04em;
+}
+
+/* 创作类型三卡 */
+.creation-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 10px;
+}
+
+.creation-card {
+  position: relative;
+  overflow: hidden;
+  min-width: 0;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  display: grid;
+  grid-template-columns: 116px minmax(0, 1fr);
+  min-height: 116px;
+  border-radius: 14px;
+  background: var(--surface-3);
+  color: inherit;
+}
+
+.creation-card.is-pressed {
+  border-color: var(--accent-line);
+}
+
+.creation-card-lead {
+  grid-row: auto;
+}
+
+.creation-card-art {
+  position: relative;
+  overflow: hidden;
+  height: 100%;
+  min-height: 116px;
+  background: #252a28;
+}
+
+.creation-card-lead .creation-card-art {
+  height: 100%;
+}
+
+.creation-card-art .art-img {
+  width: 100%;
+  height: 100%;
+}
+
+.creation-card-art .art-stack {
+  position: absolute;
+  top: 18%;
+  right: 12%;
+  bottom: 12%;
+  left: 34%;
+  width: 52%;
+  height: 58%;
+  border: 3px solid #181d1c;
+  border-radius: 9px;
+  overflow: hidden;
+  box-shadow: 0 12px 22px rgba(0, 0, 0, 0.3);
+}
+
+.creation-card-number {
+  position: absolute;
+  right: 14px;
+  bottom: 12px;
+  color: var(--lime);
+  font-size: 34px;
+  line-height: 1;
+  font-weight: 600;
+  letter-spacing: -0.08em;
+}
+
+.creation-card-badge {
+  position: absolute;
+  top: 11px;
+  left: 11px;
+  padding: 4px 7px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 999px;
+  background: rgba(13, 17, 16, 0.58);
+  color: #f0f5ec;
+  font-family: 'DM Mono', 'SF Mono', Menlo, monospace;
+  font-size: 9px;
+  letter-spacing: 0.04em;
+}
+
+.creation-card-copy {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  padding: 15px 38px 15px 16px;
+}
+
+.creation-card-copy .h3 {
+  font-size: 20px;
+  line-height: 1;
+  letter-spacing: -0.04em;
+}
+
+.creation-card-copy .creation-desc {
+  max-width: 22em;
+  margin-top: 6px;
+  color: #8f9991;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.creation-card-arrow {
+  position: absolute;
+  right: 13px;
+  bottom: 15px;
+  color: #b9c3ba;
+  font-size: 16px;
+}
+
+.creation-card-product .creation-card-art {
+  background: #1f2d2d;
+}
+
+.creation-card-image .creation-card-art {
+  background: #2b2631;
+}
+
+.creation-card-avatar .creation-card-art {
+  background: #1e2530;
+}
+
+/* 模板卡（海报方向 / 产品模板共用） */
+.poster-directions-block {
+  padding-top: 30px;
+}
+
+.poster-direction-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 20px 11px;
+}
+
+.template-card {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+}
+
+.template-image-wrap {
+  position: relative;
+  overflow: hidden;
+  aspect-ratio: 0.78;
+  border-radius: 13px;
+  background: #222;
+}
+
+.template-image {
+  width: 100%;
+  height: 100%;
+}
+
+.template-skill {
+  position: absolute;
+  left: 9px;
+  bottom: 9px;
+  padding: 6px 7px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 5px;
+  background: rgba(12, 14, 14, 0.72);
+  color: #daddd8;
+  font-family: 'DM Mono', 'SF Mono', Menlo, monospace;
+  font-size: 8px;
+  font-weight: 500;
+}
+
+.template-arrow {
+  position: absolute;
+  top: 9px;
+  right: 9px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: rgba(12, 14, 14, 0.6);
+  color: #fff;
+  font-size: 13px;
+}
+
+.template-card-copy {
+  padding-top: 10px;
+}
+
+.template-card-copy .h3 {
+  margin-top: 6px;
+}
+
+.template-card-copy .template-desc {
+  margin-top: 5px;
+  color: #8d938f;
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+/* 社区展示 */
+.showcase-block {
+  margin-top: 46px;
+}
+
+.showcase-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.showcase-card {
+  position: relative;
+  overflow: hidden;
+  aspect-ratio: 1.06;
+  border-radius: 11px;
+  background: #222;
+}
+
+.showcase-card .showcase-img {
+  width: 100%;
+  height: 100%;
+}
+
+.showcase-overlay {
+  position: absolute;
+  right: 9px;
+  bottom: 10px;
+  left: 9px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.showcase-overlay .showcase-tag {
+  color: var(--lime);
+  font-family: 'DM Mono', 'SF Mono', Menlo, monospace;
+  font-size: 8px;
+  font-weight: 500;
+  letter-spacing: 0.1em;
+}
+
+.showcase-overlay .showcase-title {
+  font-size: 13px;
+  font-weight: 600;
+  text-shadow: 0 1px 8px #000;
+}
+
+.home-footer-note {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding-top: 48px;
+  color: #626864;
+  font-family: 'DM Mono', 'SF Mono', Menlo, monospace;
+  font-size: 10px;
+}
+
+.home-footer-note .note-mark {
+  color: var(--lime);
+  font-size: 12px;
+}
+
+/* ============================================================
+   6. 创作页共用
+   ============================================================ */
+.create-content {
+  min-height: 100%;
+}
+
+.selected-template-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 15px 1px 24px;
+  color: #7f8581;
+  font-size: 11px;
+}
+
+.selected-template-line .selected-name {
+  color: #e6e9e3;
+  font-weight: 500;
+}
+
+.selected-dot {
+  width: 6px;
+  height: 6px;
+  margin-left: auto;
+  border-radius: 50%;
+}
+
+.form-section {
+  margin-top: 22px;
+}
+
+/* 页面里用 .form-heading 包一层来控制间距，避免和 section-heading 的默认下边距叠加 */
+.form-heading .section-heading {
+  margin-bottom: 0;
+}
+
+.form-heading .h2 {
+  font-size: 20px;
+}
+
+.form-heading .form-note {
+  margin-top: 6px;
+  color: #8d958f;
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+/* 上传槽 */
+.upload-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.upload-slot {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: 122px;
+  border: 1px dashed #3b4140;
+  border-radius: 12px;
+  background: var(--surface-2);
+  color: #d8ddd7;
+}
+
+.upload-slot.is-filled {
+  border-style: solid;
+  border-color: #4a5a3a;
+}
+
+.upload-slot .slot-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  margin-bottom: 9px;
+  border: 1px solid #545b57;
+  border-radius: 50%;
+  color: #dce0d8;
+  font-size: 14px;
+}
+
+.upload-slot .slot-label {
+  max-width: 86%;
+  font-size: 12px;
+  text-align: center;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.upload-slot .slot-preview {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  border-radius: 12px;
+}
+
+.required-pill {
+  position: absolute;
+  top: 9px;
+  right: 9px;
+  padding: 4px 5px;
+  border-radius: 4px;
+  background: #2a2e2d;
+  color: #777e79;
+  font-family: 'DM Mono', 'SF Mono', Menlo, monospace;
+  font-size: 8px;
+}
+
+.required-pill.is-required {
+  color: var(--lime);
+}
+
+/* 提示词输入 */
+.prompt-field {
+  position: relative;
+  margin-top: 14px;
+}
+
+.prompt-field .prompt-textarea {
+  display: block;
+  width: 100%;
+  min-height: 116px;
+  padding: 15px 15px 27px 38px;
+  box-sizing: border-box;
+  border: 1px solid #3a403e;
+  border-radius: 12px;
+  background: var(--surface-2);
+  color: #e9ede6;
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.prompt-field .prompt-icon {
+  position: absolute;
+  top: 15px;
+  left: 15px;
+  color: #88908a;
+  font-size: 13px;
+}
+
+.prompt-field .prompt-count {
+  position: absolute;
+  right: 13px;
+  bottom: 10px;
+  color: #626963;
+  font-family: 'DM Mono', 'SF Mono', Menlo, monospace;
+  font-size: 9px;
+}
+
+.prompt-suggestions {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+  overflow-x: auto;
+  white-space: nowrap;
+}
+
+.prompt-suggestions .suggestion-chip {
+  flex: 0 0 auto;
+  padding: 8px 11px;
+  border: 1px solid #303735;
+  border-radius: 999px;
+  background: #171c1b;
+  color: #9ca49d;
+  font-size: 11px;
+}
+
+/* 更多设置 */
+.advanced-section {
+  margin-top: 19px;
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+}
+
+.advanced-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 15px 0;
+  color: #b6bcb6;
+  font-size: 12px;
+}
+
+.advanced-toggle .advanced-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.advanced-toggle .advanced-label .gear {
+  color: var(--lime);
+  font-size: 13px;
+}
+
+.advanced-toggle .advanced-state {
+  color: #707772;
+  font-family: 'DM Mono', 'SF Mono', Menlo, monospace;
+  font-size: 9px;
+}
+
+.advanced-options {
+  display: flex;
+  flex-direction: column;
+  gap: 15px;
+  padding: 0 0 16px;
+}
+
+.option-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.option-row .option-label {
+  flex: 0 0 auto;
+}
+
+.option-pills {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.option-pills .pill {
+  padding: 7px 9px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.option-pills .pill.is-selected {
+  border-color: var(--lime);
+  color: var(--lime);
+}
+
+/* 下拉选择（替代原型里的 <select>） */
+.select-field {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  width: 100%;
+  min-height: 44px;
+  padding: 0 12px;
+  box-sizing: border-box;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface-2);
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.select-field .select-value {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.select-field .select-caret {
+  flex: 0 0 auto;
+  color: var(--lime);
+  font-size: 11px;
+}
+
+.select-field.is-compact {
+  min-width: 112px;
+  min-height: 34px;
+  padding: 0 11px;
+  color: var(--ink);
+  font-family: 'DM Mono', 'SF Mono', Menlo, monospace;
+  font-size: 11px;
+}
+
+/* 字段式生成页（海报 / 产品 / 头像）共用的一组字段样式。
+   ------------------------------------------------------------------
+   ⚠️ 2026-09-27 墓碑：以下规则已**整组删除**，因为它们对应的页面结构没了 ——
+      `.preview-panel` / `.preview-img` / `.preview-scrim` / `.preview-topline` /
+      `.preview-bottom` / `.preview-label` / `.preview-action`
+        三页顶部原来是 `aspect-ratio: 0.92` 的大图（实测约 352×383，占首屏近一半），
+        已按王 2026-09-27 的决定缩成 96×96 并进页头（见 `.composer-page-thumb`）。
+      `.structured-intro` / `.structured-intro .h1` / `.structured-intro .structured-copy`
+        「两行大标题 + 说明」的页头，已换成 `.composer-page-head`（与自由生图同一套）。
+      `.structured-section` / `.structured-section .form-heading`
+        一节一节往下堆的分区，已换成 `input-card` + `settings-card` 两层。
+      `.compact-settings` / `.compact-settings .option-row + .option-row`
+        原来那条上下带分隔线的设置区，已换成 `.settings-card`。
+      `.replace-upload-section` / `.replace-upload-section .upload-slot`
+        上传区的外壳，上传槽现在直接放在 `input-card` 里。
+      `.freeform-intro` / `.freeform-intro .h1` / `.freeform-intro .freeform-copy`
+        P0 把自由生图重组掉之后就没人用了，同一批清掉。
+   ⇒ 删除判据见 `_diag/remove-dead-css.py`（只删「每一段选择器都含死类」的规则，
+     逗号组一半死一半活的一律不动）。删掉的是 20 条规则 / 2,231 B。
+   ⚠️ 这张表是**墓碑**，不是待办 —— 别照着它把规则加回来。 */
+.structured-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+.structured-field {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  margin-top: 10px;
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.structured-grid .structured-field {
+  margin-top: 0;
+}
+
+.structured-field .field-input {
+  width: 100%;
+  min-height: 40px;
+  padding: 0 11px;
+  box-sizing: border-box;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--surface-2);
+  color: var(--ink);
+  font-size: 12px;
+}
+
+.structured-lock {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  margin: 19px 0 13px;
+  color: var(--muted);
+  font-family: 'DM Mono', 'SF Mono', Menlo, monospace;
+  font-size: 9px;
+}
+
+.structured-lock .lock-icon {
+  color: var(--accent);
+  font-size: 11px;
+}
+
+/* 自由生图 */
+.freeform-prompt .prompt-textarea {
+  height: 184px;
+}
+
+.freeform-prompt-section {
+  margin-top: 10px;
+}
+
+.freeform-references {
+  padding: 0 4px;
+}
+
+.freeform-references .form-heading {
+  margin-bottom: 14px;
+}
+
+.reference-grid {
+  display: flex;
+  gap: 10px;
+  overflow-x: auto;
+}
+
+.reference-thumb,
+.reference-add {
+  position: relative;
+  aspect-ratio: 1;
+  overflow: hidden;
+  border-radius: 10px;
+  flex: 0 0 84px;
+  width: 84px;
+}
+
+.reference-thumb {
+  border: 1px solid #465048;
+  background: #202523;
+}
+
+.reference-preview {
+  width: 100%;
+  height: 100%;
+}
+
+.reference-remove {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 12px;
+  background: rgba(10, 12, 12, 0.76);
+  color: #ffffff;
+  font-size: 18px;
+  line-height: 1;
+}
+
+.reference-add {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border: 1px dashed #4d5751;
+  background: var(--surface-2);
+  color: #b5bcb6;
+}
+
+.reference-add-icon {
+  color: var(--lime);
+  font-size: 28px;
+  line-height: 1;
+}
+
+.reference-add-label {
+  font-size: 11px;
+}
+
+.freeform-settings {
+  padding: 0 4px;
+}
+
+.freeform-settings .form-heading {
+  margin-bottom: 14px;
+}
+
+/* 底部生成 Dock */
+/* 高度 = 视觉高度 + 底部安全区，内容区始终是 66px，48px 按钮放得下 */
+/* 深空仪器（2026-09-27）：dock 从贴底整条改成悬浮胶囊。
+   左右留 16px、下方留 12px+安全区，圆角 20，毛玻璃底。
+   页面底部预留的 --dock-h(92px) 空间比胶囊实际高度略大，宁多勿少，不叠内容。 */
+.generate-dock {
+  position: fixed;
+  right: 16px;
+  bottom: calc(12px + var(--safe-b));
+  left: 16px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 12px 12px 16px;
+  box-sizing: border-box;
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  background: var(--dock-bg);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+}
+
+.dock-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 68px;
+  /* ⚠️ 这里原本写死 `color: #6f7671`（token 化之前的残留，**从未生效**：
+     文件末尾有一条同选择器的规则把它覆盖成 --muted）。
+     它骗过了对比度审计：工具逐条规则独立评估，把这条死声明报成「4.37:1 确定不合格」，
+     而页面上根本不是这个颜色。⇒ color 的唯一真源在文件末尾那条 `.dock-meta`。 */
+  font-family: 'DM Mono', 'SF Mono', Menlo, monospace;
+  font-size: 9px;
+}
+
+.dock-meta .dock-cost {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  color: #d9ded8;
+  font-family: 'DM Mono', 'SF Mono', Menlo, monospace;
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.dock-meta .dock-cost .cost-mark {
+  color: var(--lime);
+  font-size: 11px;
+}
+
+.generate-cta {
+  flex: 0 0 auto;
+  min-width: 104px;
+  min-height: 48px;
+  font-size: 13px;
+}
+
+/* 叠印修复（2026-09-27，方案A：加不透明底）。
+   error/hint 是 absolute 浮在 dock 上方的，之前透明底，文字直接压在页面内容上。
+   现在给它们自己的毛玻璃胶囊底，悬空也看得清。 */
+.generate-error {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 8px);
+  left: 0;
+  padding: 9px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  background: rgba(10, 13, 15, 0.96);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  color: #ffb4a9;
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+/* ============================================================
+   7. 结果页
+   ============================================================ */
+.result-intro {
+  margin-bottom: 22px;
+}
+
+.result-intro .h2 {
+  margin-top: 8px;
+  font-size: 25px;
+}
+
+.result-intro .result-copy {
+  margin-top: 8px;
+  color: #858c86;
+  font-size: 11px;
+}
+
+/* 结果页改版：从「两列 4 格」改成「大图 + 底部缩略条」。
+   理由：生成结果是要付费的主角，两列下每张只有 ~170px，用户没法判断质量。
+   参考 Krea 的沉浸式处理。缩略条保留「多张同时可见」的对比能力。
+   ⚠️ 缩略条和序号角标**只在多张时渲染**（`result/index.tsx` 的 `multiple`）：
+      当前 `BATCH_SIZE = 1`，`.result-strip` 是 `repeat(4, …)` 定宽网格，
+      一张图只占 23% 宽、右边留 3 个空槽，看起来像加载失败。
+      这套样式是为「多张」写的，别因为现在只出 1 张就把它删掉。
+   注意：大图左上角留给 AIGC 显式标识（见下方 .aigc-badge），
+   序号胶囊放右上角，别和标识抢位置。
+   缩略图**不带**角标（王 2026-09-20 定）：56px 宽里 is-compact 角标要占 55%，
+   把图盖住了；而缩略图是「选哪张」的按钮，不是用来看的。
+   标识由大图承担，导出/预览/分享三条路径另有合成收口。
+   ⚠️ 资产页缩略图仍然每张都带 —— 那一页整页只有缩略图，去掉等于整页没标识。 */
+.result-screen .result-intro {
+  margin-bottom: 14px;
+}
+
+.result-stage {
+  position: relative;
+  overflow: hidden;
+  aspect-ratio: 0.84;
+  border-radius: 16px;
+  background: #202424;
+}
+
+.result-stage .result-img {
+  width: 100%;
+  height: 100%;
+}
+
+/* 深空仪器：结果图 1px 扫描线 —— 生成完成时扫过一次。
+   极淡：1px 信号青 + 轻微辉光，1.1s 播完消失，不抢图的风头。 */
+@keyframes result-scanline {
+  0% { top: 0; opacity: 0; }
+  12% { opacity: 0.85; }
+  88% { opacity: 0.85; }
+  100% { top: 100%; opacity: 0; }
+}
+
+.result-scan {
+  position: absolute;
+  right: 0;
+  left: 0;
+  top: 0;
+  height: 1px;
+  background: var(--signal);
+  box-shadow: 0 0 10px rgba(94, 234, 212, 0.45);
+  opacity: 0;
+  pointer-events: none;
+  animation: result-scanline 1.1s var(--ease-out) 0.15s 1 both;
+}
+
+/* 再来一张：结果页的一键复购主按钮。全宽胶囊，权重压过下面的三个次级操作。 */
+.result-rerun {
+  width: 100%;
+  min-height: 48px;
+  margin-top: 14px;
+}
+
+.result-stage-badge {
+  position: absolute;
+  top: 11px;
+  right: 11px;
+  z-index: 2;
+  padding: 5px 9px;
+  border: 1px solid rgba(255, 255, 255, 0.17);
+  border-radius: 999px;
+  background: rgba(12, 14, 14, 0.62);
+  color: #e9ece5;
+  font-family: 'DM Mono', 'SF Mono', Menlo, monospace;
+  font-size: 10px;
+  font-weight: 500;
+}
+
+.result-strip {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.result-thumb {
+  position: relative;
+  overflow: hidden;
+  aspect-ratio: 1;
+  border: 2px solid transparent;
+  border-radius: 10px;
+  background: #202424;
+  opacity: 0.5;
+}
+
+.result-thumb.is-selected {
+  border-color: var(--lime);
+  opacity: 1;
+}
+
+.result-thumb .result-img {
+  width: 100%;
+  height: 100%;
+}
+
+.result-check {
+  position: absolute;
+  top: 5px;
+  right: 5px;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--lime);
+  color: #141714;
+  font-size: 10px;
+  font-weight: 700;
+}
+
+/* ============================================================
+   AIGC 显式标识
+   ------------------------------------------------------------
+   《人工智能生成合成内容标识办法》（2025-09-01 施行）第四条(三)：
+   「在图片的适当位置添加显著的提示标识」。
+   所以它必须叠在图片上，不能只在页面角落放一行说明。
+   用深底浅字而不是 lime：强调色是留给「可操作」元素的，
+   标识是告知性信息，抢了强调色反而让人以为是按钮。
+   ============================================================ */
+.aigc-badge {
+  position: absolute;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  padding: 3px 7px;
+  border-radius: 999px;
+  background: rgba(12, 14, 14, 0.74);
+  color: #eef2e6;
+  font-family: 'DM Mono', 'SF Mono', Menlo, monospace;
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.04em;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+.aigc-badge.is-top-left {
+  top: 9px;
+  left: 9px;
+}
+
+.aigc-badge.is-bottom-left {
+  bottom: 8px;
+  left: 8px;
+}
+
+/* 缩略图上的紧凑版：仍然清晰可辨，但不必占掉半张图 */
+.aigc-badge.is-compact {
+  padding: 2px 6px;
+  font-size: 9px;
+}
+
+/* ============================================================
+   隐私授权弹窗
+   ------------------------------------------------------------
+   同意按钮必须是原生 <Button open-type="agreePrivacyAuthorization">，
+   基础库会校验「被点过的按钮」确实是这个 id，用 View 假装点击不会放行。
+   原生 button 自带背景/边框/圆角，下面要逐条覆盖掉，才能和
+   .primary-cta 长得一样（::after 是它默认边框的载体，必须清掉）。
+   ============================================================ */
+.privacy-mask {
+  position: fixed;
+  z-index: 90;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  padding: var(--privacy-pad) 16px calc(var(--privacy-pad) + var(--safe-b));
+  background: rgba(6, 8, 8, 0.72);
+}
+
+.privacy-card {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  max-width: 360px;
+  padding: 20px 18px 18px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: var(--surface);
+}
+
+.privacy-title {
+  margin-top: 10px;
+  color: var(--ink);
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.privacy-copy {
+  margin-top: 8px;
+  color: #969d97;
+  font-size: 12px;
+  line-height: 1.65;
+}
+
+.privacy-link {
+  margin-top: 12px;
+  color: var(--lime);
+  font-size: 12px;
+}
+
+.privacy-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 18px;
+}
+
+.privacy-decline {
+  flex: 0 0 92px;
+}
+
+/* 覆盖原生 button 的默认外观，让它等同于 .primary-cta */
+.privacy-agree {
+  flex: 1;
+  min-height: 46px;
+  margin: 0;
+  padding: 0;
+  border: none;
+  line-height: 46px;
+  text-align: center;
+}
+
+.privacy-agree::after {
+  border: none;
+}
+
+.result-actions {
+  display: grid;
+  grid-template-columns: 1fr 1.35fr;
+  gap: 9px;
+  margin-top: 20px;
+}
+
+.export-button {
+  min-height: 46px;
+  font-size: 12px;
+}
+
+/* ============================================================
+   8. 资产库
+   ============================================================ */
+.asset-list {
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
+}
+
+.asset-group {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.asset-group-heading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.asset-group-heading .asset-title {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.asset-group-heading .asset-skill {
+  color: #717972;
+  font-family: 'DM Mono', 'SF Mono', Menlo, monospace;
+  font-size: 9px;
+}
+
+.asset-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+/* 包一层是为了给 AIGC 标识提供定位参照（标识必须叠在图片上） */
+.asset-cell {
+  position: relative;
+}
+
+.asset-grid .asset-img {
+  width: 100%;
+  aspect-ratio: 0.9;
+  border-radius: 10px;
+  background: #202424;
+}
+
+.empty-assets {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  min-height: 54vh;
+  color: #737b75;
+  text-align: center;
+}
+
+.empty-assets .empty-mark {
+  color: var(--lime);
+  font-size: 26px;
+}
+
+.empty-assets .empty-title {
+  color: #dce1da;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.empty-assets .empty-copy {
+  max-width: 220px;
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+/* 资产库的状态提示：降级说明 / 加载中 / 删除手势提示。
+   全部走中性色，不引入第二个强调色（单一强调色纪律）。 */
+.asset-notice {
+  margin-bottom: 18px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--surface);
+  color: #8d948e;
+  font-family: 'DM Mono', 'SF Mono', Menlo, monospace;
+  font-size: 10px;
+  line-height: 1.6;
+}
+
+/* 资产库骨架屏（2026-09-27）。真源是服务端 `GET /api/assets`，首屏确实要等 ——
+   原来那行「正在同步资产库…」既没形状也没信息量。
+   🔴 占位块**复用真实列表的类**（`.asset-group` / `.asset-grid` / `.asset-cell`
+      / `.asset-img`，见 assets/index.tsx），所以这里只补「骨架条」两种形状，
+      卡片几何交给已有的规则 —— 另写一套一定会漂。 */
+.asset-skeleton {
+  display: flex;
+  flex-direction: column;
+  gap: 26px; /* 与 .asset-list 一致 */
+}
+
+.asset-skeleton-bar {
+  height: 12px;
+  border-radius: 4px;
+  background: var(--surface-2);
+}
+
+.asset-skeleton-bar.is-title {
+  width: 44%;
+  height: 13px;
+}
+
+.asset-skeleton-bar.is-meta {
+  width: 26%;
+  height: 9px;
+}
+
+.asset-hint {
+  padding-top: 4px;
+  color: #5f6660;
+  font-family: 'DM Mono', 'SF Mono', Menlo, monospace;
+  font-size: 9px;
+  text-align: center;
+}
+
+/* ============================================================
+   9. 充值中心
+   ============================================================ */
+.recharge-balance {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 15px 16px;
+  border: 1px solid #303735;
+  border-radius: 14px;
+  background: linear-gradient(135deg, #1c2420, #171b1b);
+}
+
+.recharge-balance .balance-main {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.recharge-balance .balance-value {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: #f2f5ed;
+  font-size: 22px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.04em;
+}
+
+.recharge-balance .balance-value .balance-mark {
+  color: var(--lime);
+  font-size: 17px;
+}
+
+.recharge-balance .balance-note {
+  color: #7f8982;
+  font-size: 10px;
+}
+
+.balance-orb {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  border: 1px solid var(--accent-line);
+  border-radius: 50%;
+  background: var(--accent-soft);
+  color: var(--lime);
+  font-size: 18px;
+}
+
+.recharge-heading {
+  padding: 36px 4px 25px;
+}
+
+.recharge-heading .h1 {
+  margin-top: 11px;
+  font-size: 32px;
+}
+
+.recharge-heading .recharge-copy {
+  margin-top: 11px;
+  color: #8c948e;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.plan-section {
+  margin-top: 14px;
+}
+
+.plan-section-title {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  margin-bottom: 11px;
+}
+
+.plan-section-title .h2 {
+  font-size: 19px;
+}
+
+.plan-section-title .plan-caption {
+  color: #717972;
+  font-family: 'DM Mono', 'SF Mono', Menlo, monospace;
+  font-size: 9px;
+}
+
+.plan-list {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+}
+
+.plan-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 14px 15px;
+  /* 深空仪器：发丝描边 + 14 圆角，选中态只有信号青一种强调。 */
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--surface);
+  color: #dce2da;
+  transition: border-color 200ms var(--ease-out),
+              background 200ms var(--ease-out),
+              box-shadow 200ms var(--ease-out);
+}
+
+.plan-card.is-selected {
+  border-color: var(--signal);
+  background: var(--accent-soft);
+  box-shadow: 0 0 28px rgba(94, 234, 212, 0.07);
+}
+
+.plan-card-top,
+.plan-card-main {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.plan-badge {
+  padding: 4px 7px;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--lime);
+  font-family: 'DM Mono', 'SF Mono', Menlo, monospace;
+  font-size: 9px;
+}
+
+.plan-card-main .plan-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.plan-card-main .plan-name {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.plan-card-main .plan-detail {
+  color: #7e8780;
+  font-size: 10px;
+}
+
+.plan-card-main .plan-price {
+  color: #f3f5ed;
+  font-size: 20px;
+  font-weight: 600;
+  letter-spacing: -0.04em;
+  font-variant-numeric: tabular-nums;
+}
+
+/* 深空仪器：单价行 —— 「约 ¥0.46/张」，帮用户把点数换算成钱。 */
+.plan-card-main .plan-unit {
+  color: var(--muted);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}
+
+.plan-radio {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 19px;
+  height: 19px;
+  border: 1px solid #4b554e;
+  border-radius: 50%;
+  color: #111511;
+  font-size: 11px;
+}
+
+.plan-card.is-selected .plan-radio {
+  border-color: var(--lime);
+  background: var(--lime);
+}
+
+.recharge-cta {
+  width: 100%;
+  min-height: 48px;
+  margin-top: 23px;
+}
+
+.recharge-footnote {
+  margin-top: 11px;
+  color: #626b65;
+  font-size: 9px;
+  text-align: center;
+}
+
+/* ============================================================
+   10. 底部导航（创作 / 灵感 / 资产 / 我的）
+   ============================================================ */
+.bottom-nav {
+  position: fixed;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  height: calc(var(--nav-h) + var(--safe-b));
+  padding: var(--nav-pad) 11px calc(var(--nav-pad) + var(--safe-b));
+  box-sizing: border-box;
+  border-top: 1px solid #272c2b;
+  background: rgba(16, 18, 18, 0.96);
+}
+
+.nav-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  color: #666d68;
+  font-size: 9px;
+}
+
+.nav-item .nav-icon {
+  font-size: 16px;
+  line-height: 1;
+}
+
+.nav-item.is-active {
+  color: var(--lime);
+}
+
+/* ============================================================
+   11. 产品工作室（原产品模板库）/ 产品替换
+   ============================================================ */
+.product-template-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.product-template-card {
+  position: relative;
+  display: grid;
+  grid-template-columns: 112px 1fr 18px;
+  gap: 13px;
+  align-items: center;
+  padding: 9px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 14px;
+  background: var(--surface-3);
+  color: inherit;
+}
+
+.product-template-card.is-pressed {
+  border-color: var(--accent-line);
+}
+
+.product-template-image {
+  position: relative;
+  overflow: hidden;
+  height: 112px;
+  border-radius: 9px;
+  background: #252a28;
+}
+
+.product-template-image .product-img {
+  width: 100%;
+  height: 100%;
+}
+
+.product-template-image .product-index {
+  position: absolute;
+  left: 8px;
+  bottom: 7px;
+  color: #f2f7ee;
+  font-family: 'DM Mono', 'SF Mono', Menlo, monospace;
+  font-size: 10px;
+}
+
+.product-template-copy {
+  min-width: 0;
+}
+
+.product-template-copy .h3 {
+  margin-top: 6px;
+  font-size: 18px;
+  line-height: 1;
+  letter-spacing: -0.04em;
+}
+
+.product-template-copy .product-desc {
+  margin-top: 6px;
+  color: #8d978f;
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.product-template-card .product-arrow {
+  color: #869087;
+  font-size: 14px;
+}
+
+/* ---- 产品工作室：顶层三个**同级**意图 + 固定工作流的模式卡 ----
+   交接文件明确：不要把三个能力塞成平铺的九宫格。
+   前两个是固定工作流（只有一个必填项），第三个是 14 个锁定艺术指导的高级场景，
+   平铺会让用户以为它们是同一种东西。 */
+.studio-tabs {
+  display: flex;
+  gap: 8px;
+  margin-top: 20px;
+}
+
+.studio-tab {
+  display: flex;
+  flex: 1 1 0;
+  align-items: center;
+  justify-content: center;
+  min-width: 0;
+  /* 44px：这一行是主控件，不是设置项 —— 与 .recreate-rights-hit 同一条理由 */
+  min-height: 44px;
+  padding: 0 6px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 10px;
+  background: var(--surface-3);
+}
+
+/* 选中态有边框 + 底色 + 文字前的 ✓ 三重表达，不只靠颜色 */
+.studio-tab.is-active {
+  border-color: var(--accent-line);
+  background: var(--accent-soft);
+}
+
+.studio-tab-title {
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.studio-tab-note {
+  display: block;
+  margin-top: 10px;
+  color: #8d978f;
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.studio-mode-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.studio-mode-card {
+  position: relative;
+  display: grid;
+  grid-template-columns: 40px 1fr 18px;
+  gap: 13px;
+  align-items: center;
+  min-height: 84px;
+  padding: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 14px;
+  background: var(--surface-3);
+}
+
+.studio-mode-index {
+  color: #8d978f;
+  font-family: 'DM Mono', 'SF Mono', Menlo, monospace;
+  font-size: 11px;
+}
+
+.studio-mode-copy {
+  min-width: 0;
+}
+
+.studio-mode-title {
+  display: block;
+  color: var(--ink);
+  font-size: 17px;
+  font-weight: 700;
+}
+
+.studio-mode-desc {
+  display: block;
+  margin-top: 5px;
+  color: #8d978f;
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.studio-mode-card .studio-mode-arrow {
+  color: #869087;
+  font-size: 14px;
+}
+
+.replace-tip {
+  margin-top: 9px;
+  color: var(--muted);
+  font-size: 10px;
+  text-align: center;
+}
+
+.replace-template-meta {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 26px;
+  padding: 14px 0;
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+}
+
+.replace-template-meta .replace-name {
+  display: block;
+  margin-top: 7px;
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.replace-lock {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--muted);
+  font-family: 'DM Mono', 'SF Mono', Menlo, monospace;
+  font-size: 9px;
+  white-space: nowrap;
+}
+
+.replace-lock .lock-icon {
+  color: var(--accent);
+  font-size: 11px;
+}
+
+.back-home-link {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 22px auto 0;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+/* ============================================================
+   12. 通用工具类
+   ============================================================ */
+/* 标题折行：小程序里 <Text> 默认 inline，需要显式 block 才能换行 */
+.h1 .line,
+.h2 .line,
+.h3 .line {
+  display: block;
+}
+
+/* 输入框占位符（Taro 用 placeholderClass 指定） */
+.prompt-placeholder {
+  color: #747b76;
+}
+
+.field-placeholder {
+  color: #5f6962;
+}
+
+/* 结果页 / 产品模板库里的 intro 标题跟随 intro 的节奏 */
+.result-intro .h1 {
+  margin-top: 8px;
+}
+
+.row-between {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.stack-6 {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.mt-22 {
+  margin-top: 22px;
+}
+
+.hidden {
+  display: none;
+}
+
+/* ============================================================
+   13. savee 语言皮肤（2026-09-22 改造）
+   ------------------------------------------------------------
+   参照：savee 的 App Store 截图（视觉语言）+ denim 的「找 → 选 → 做」
+   三段式（流程骨架）。内容全部是 FORMÉ 自己的。
+   王的两个决定：**不要强调色**（纯黑白灰）、**深色无条件默认**。
+
+   这一块原本是今天 15:39 追加的奶白整块皮肤。改造方式：
+     · token 块翻成深色（本段），组件规则**保持原位不动**（它们是布局的真源）
+     · 里面写死的浅色值一律换成变量（见下面的 --on-accent / --header-bg 等）
+
+   ⚠️ 2026-09-22 21:2x 王看过截图后改主意：**不再跟随系统，深色无条件默认**。
+      原来文件末尾那段 `@media (prefers-color-scheme: light)` 已**整段删除**。
+      依据是实测出来的两件事，不是感觉：
+        · 模拟器 / 多数人的系统是浅色 ⇒「跟随系统」等于**大多数人看到旧的奶白+绿**，
+          这一轮做的深色 savee 语言反而成了少数派皮肤；
+        · 浅色下 `navigationBarTextStyle` 只能写死 `white`（app.json 没开
+          darkmode + themeLocation）⇒ 状态栏白字压在奶白底上，
+          截图左上角「21:16」几乎看不见 —— 真 bug。
+      ⇒ 现在**只有一套皮肤**。以后要再加浅色，必须连同 darkmode + theme.json 一起做，
+        否则状态栏那一处必然又是「白字压白底」。
+   ============================================================ */
+page {
+  /* 深空仪器（2026-09-27）：底色从纯黑 #050505 换成冷调深空 #08090B，
+     发丝线从 13% 收细到 8% —— 层级靠描边和透明度，不靠阴影。 */
+  --ink: #F2F4F4;
+  --muted: #9AA3A3;
+  --faint: #5A6363;
+  --line: rgba(255, 255, 255, 0.08);
+  --bg: #08090B;
+  --surface: #0e0e0e;
+  --surface-2: #141414;
+  --surface-3: #191919;
+
+  /* ---- 强调色：2026-09-27 王确认引入单一「信号青」#5EEAD4 ----
+     2026-09-22 曾把 --lime/--accent/--signal 归零到近白（纯黑白灰方向）；
+     9-27 王看过「深空仪器」效果图后决定：全站只用这一个强调色。
+     **不改名**：--lime 全项目十几处引用，改名会漏，漏了是静默的
+     （颜色照旧）。同理 --accent / --signal 跟着一起翻成信号青。 */
+  --lime: #5EEAD4;
+  --accent: #5EEAD4;
+  --accent-soft: rgba(94, 234, 212, 0.10);
+  --accent-line: rgba(94, 234, 212, 0.45);
+  --signal: #5EEAD4;
+
+  /* ⚠️ `--accent` 现在是信号青，「压在强调色上的文字」走这个变量
+     （深色字压青底对比度足够，不要写 #ffffff）。 */
+  --on-accent: #050505;
+  --header-bg: rgba(8, 9, 11, 0.94);
+  --nav-bg: rgba(12, 12, 12, 0.86);
+  --dock-bg: rgba(10, 13, 15, 0.88);
+  --scrim: rgba(0, 0, 0, 0.62);
+
+  /* 动效与圆角：高级感要「稳」不要「弹」。
+     全站交互统一这条 ease-out；回弹曲线 (0.34,1.56,0.64,1) 停用。
+     圆角只用三档，不自由发挥。 */
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --r-sm: 10px;
+  --r-md: 14px;
+  --r-lg: 20px;
+
+  /* savee 实测：马赛克缝隙 12px / 299px 屏宽 = 4.0% */
+  --mosaic-gap: 4%;
+  --home-bottom-pad: 18px;
+
+  background: #08090B;
+  color: #F2F4F4;
+  font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Helvetica Neue', Arial, sans-serif;
+}
+
+.app-screen {
+  background: var(--bg);
+  color: var(--ink);
+}
+
+/* 深空仪器：.eyebrow 在第 1 节已定义 DM Mono + 0.13em 字距（仪器刻度感），
+   这里不要再把它拉回 0 —— 之前那条 `.eyebrow, .mono { letter-spacing: 0 }`
+   把顶栏微标签的字距吃掉了（2026-09-27 修复）。
+   .mono 专管数字：等宽对齐，仪表读数不跳动。 */
+.mono {
+  font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Helvetica Neue', Arial, sans-serif;
+  letter-spacing: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+.eyebrow {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.h1,
+.h2,
+.h3 {
+  color: var(--ink);
+  letter-spacing: 0;
+}
+
+.h2 {
+  font-size: 25px;
+  line-height: 1.18;
+}
+
+.h3 {
+  font-size: 16px;
+  line-height: 1.25;
+}
+
+.primary-cta {
+  border-radius: 8px;
+  background: var(--accent);
+  /* 🔴 2026-09-23 修：这里原先是写死的 `#ffffff`。
+     `--accent` 是 `#f5f5f2`（近白）⇒ 白字压近白底，实测 **1.09:1**，
+     也就是「生成」按钮的字**基本看不见**（`.generate-cta .cta-cost` 里的价格同理，1.00:1）。
+     本段（第 13 节 savee 皮肤）的注释写着「里面写死的浅色值一律换成变量
+     （见下面的 --on-accent / --header-bg 等）」—— 这条 `color` 就是那次改造漏掉的一处。
+     判据：全项目其它 `background: var(--accent)` 的地方（.composer-launch / .result-check /
+     .result-action-save / .asset-filter.is-active / .me-recharge）**全都**配 `var(--on-accent)`，
+     只有这里配了 `#fff`。⇒ 改回 `var(--on-accent)`，对比度 1.09 → 18.66:1。
+     ⚠️ 这个按钮用在 5 处：GenerateDock（每个创作页的主按钮）、PrivacyGate、
+     资产库、充值、结果页。 */
+  color: var(--on-accent);
+}
+
+.secondary-button {
+  border-color: var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--ink);
+}
+
+.app-header {
+  border-bottom-color: var(--line);
+  background: var(--header-bg);
+}
+
+.header-back,
+.header-side {
+  color: var(--ink);
+}
+
+.header-back {
+  width: 36px;
+  height: 36px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+}
+
+.header-title {
+  color: var(--ink);
+  font-size: 16px;
+  letter-spacing: 0;
+  /* 几何（max-width 封顶 / 省略号）在 §3 的 .header-title 里，那里和顶栏高度放一起 */
+}
+
+/* Home: answer the user's first question before explaining the product. */
+.home-content {
+  padding-top: calc(var(--home-top-pad) + var(--safe-t));
+}
+
+.home-topline {
+  min-height: 38px;
+}
+
+.brand-lockup {
+  gap: 7px;
+  color: var(--ink);
+  font-size: 16px;
+  font-weight: 750;
+  letter-spacing: 0;
+}
+
+.brand-mark {
+  color: var(--accent);
+}
+
+.credit-pill {
+  gap: 5px;
+  min-height: 34px;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.credit-arrow { color: var(--muted); font-size: 16px; }
+
+.home-intro {
+  padding: 30px 1px 18px;
+}
+
+.home-kicker,
+.composer-overline,
+.library-overline,
+.result-overline {
+  display: block;
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0;
+}
+
+.home-title,
+.composer-page-title {
+  display: block;
+  margin-top: 8px;
+  color: var(--ink);
+  font-size: 30px;
+  font-weight: 750;
+  line-height: 1.18;
+  letter-spacing: 0;
+}
+
+.home-subtitle,
+.composer-page-copy {
+  display: block;
+  margin-top: 8px;
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1.55;
+}
+
+.home-composer-card {
+  padding: 15px;
+  border: 1px solid #cddccf;
+  border-radius: 8px;
+  background: var(--surface);
+  box-shadow: 0 10px 24px rgba(27, 53, 38, 0.07);
+}
+
+.composer-card-head,
+.composer-card-footer,
+.home-section-heading,
+.library-title-row,
+.composer-section-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.composer-card-label,
+.home-section-title {
+  color: var(--ink);
+  font-size: 16px;
+  font-weight: 700;
+}
+
+.home-section-caption {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.home-composer-input {
+  display: block;
+  width: 100%;
+  min-height: 84px;
+  margin-top: 14px;
+  color: var(--ink);
+  font-size: 16px;
+  line-height: 1.5;
+}
+
+.composer-card-footer { margin-top: 12px; }
+
+.composer-launch {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-width: 84px;
+  min-height: 42px;
+  border-radius: 8px;
+  background: var(--accent);
+  color: var(--on-accent);
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.home-workflows { margin-top: 46px; }
+.home-recent-section { margin-top: 30px; }
+
+.home-section-caption { margin-left: auto; }
+
+.home-section-link {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 650;
+}
+
+/* 3 列（2026-09-27 王定）。原来 2 列但有 5 个工具
+   ⇒ 第 3 行只剩「头像」一个，右侧空一格。
+   ❗ 3 列 + 5 项仍会空一格（3+2）—— 空格变小，不是消失。
+   真要填满需要第 6 个工具方向（待王定）。 */
+.workflow-row {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 13px;
+}
+
+.workflow-item {
+  min-height: 94px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+}
+
+.workflow-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 7px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 14px;
+}
+
+.workflow-label,
+.workflow-hint,
+.inspiration-tag,
+.home-feature-kicker,
+.composer-section-note {
+  display: block;
+}
+
+.workflow-label {
+  margin-top: 10px;
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.workflow-hint {
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: 10px;
+}
+
+/* 入口单次消耗 —— 跟 dock 是同一套语言（✦ + 点数），字小一号、颜色收一档，
+   不抢 label 的风头，只做价格透明。数字用 tabular-nums 防跳动。 */
+.workflow-cost {
+  display: block;
+  margin-top: 6px;
+  color: var(--faint);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}
+
+.workflow-cost .cost-mark {
+  color: var(--signal);
+}
+
+.inspiration-strip {
+  display: flex;
+  gap: 10px;
+  margin: 13px -18px 0;
+  padding: 0 var(--page-pad);
+  overflow-x: auto;
+}
+
+.inspiration-card {
+  flex: 0 0 168px;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+}
+
+.inspiration-image {
+  display: block;
+  width: 100%;
+  height: 152px;
+  background: var(--surface-2);
+}
+
+.inspiration-copy { padding: 9px 10px 10px; color: var(--ink); font-size: 13px; font-weight: 700; }
+.inspiration-tag { margin-top: 4px; color: var(--muted); font-size: 9px; font-weight: 500; }
+
+/* Composer: one surface for the creative brief, supporting choices only when needed. */
+.composer-page-head { padding: 20px 2px 18px; }
+.composer-page-title { font-size: 27px; }
+
+/* ── 带模板缩略图的页头（2026-09-27 与三个字段式生成页同构后新增） ────────
+   三页原来顶部是 `.preview-panel`（`aspect-ratio: 0.92` ⇒ 实测约 **352×383**），
+   一张图占掉首屏近一半，用户要滚过它才看得到输入项 —— 这是「界面杂乱」的主因。
+   王 2026-09-27 定：缩成 96×96 小方图并入页头。 */
+.composer-page-head.is-thumbed {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+/* 缩略图右列窄（352 − 96 − 14 = 242），27px 的标题在那一列里会折成很难看的
+   两三行 ⇒ 这一支里把标题收到 24px。自由生图的页头仍是 27px（整幅宽）。 */
+.composer-page-head.is-thumbed .composer-page-title {
+  font-size: 24px;
+}
+
+.composer-page-thumb {
+  flex: 0 0 96px;
+  width: 96px;
+  height: 96px;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface-2);
+}
+
+.composer-page-thumb-img {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+/* min-width: 0 不能省：flex 子项默认 min-width: auto，长文案会把这一列撑开、
+   缩略图被挤扁。这是 flex 里最经典的静默布局失败。 */
+.composer-page-heading {
+  flex: 1;
+  min-width: 0;
+}
+
+/* ── 字段进卡片后的间距收口（2026-09-27） ────────────────────────────
+   这些元素原来靠 `structured-section` 的 `margin-top: 24px` 排节奏，
+   进了 `input-card` 之后由卡片的 padding 负责，外间距要收掉，
+   否则卡片里会出现「第一项离顶很远、后面越挤越紧」的节奏。 */
+.input-card .composer-section-title { margin-bottom: 12px; }
+.input-card .structured-field { margin-top: 14px; }
+.input-card .structured-grid { margin-top: 14px; }
+.input-card .structured-grid .structured-field { margin-top: 0; }
+.input-card .structured-lock { margin: 16px 0 0; }
+.input-card .replace-tip { margin-top: 10px; }
+/* 模板信息原来是「上下各一条分隔线」的独立区块，进卡片后只留上边一条，
+   当作卡片自己的页脚。 */
+.input-card .replace-template-meta {
+  margin-top: 16px;
+  padding: 13px 0 0;
+  border-top: 1px solid var(--line);
+  border-bottom: 0;
+  align-items: center;
+}
+.composer-surface { overflow: hidden; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); }
+.composer-surface .prompt-field { padding: 14px 14px 6px; border: 0; background: transparent; }
+.freeform-prompt .prompt-textarea { height: 142px; color: var(--ink); font-size: 16px; line-height: 1.55; }
+.composer-toolbar { display: flex; align-items: center; min-height: 48px; padding: 0 12px; border-top: 1px solid var(--line); background: var(--surface-2); }
+.composer-tool { display: flex; align-items: center; gap: 5px; min-height: 38px; padding: 0 8px; color: var(--accent); font-size: 12px; font-weight: 650; }
+.composer-tool-icon { color: var(--muted); }
+.composer-tool-quiet { margin-left: auto; padding-right: 0; color: var(--muted); }
+.composer-suggestions { display: flex; gap: 8px; margin-top: 11px; overflow-x: auto; }
+.composer-suggestion { flex: 0 0 auto; min-height: 32px; padding: 0 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); color: var(--muted); font-size: 11px; line-height: 32px; }
+.composer-reference-section { margin-top: 27px; }
+.composer-section-title { color: var(--ink); font-size: 15px; font-weight: 700; }
+.composer-section-note { margin-top: 3px; color: var(--muted); font-size: 11px; font-weight: 400; }
+.reference-grid { gap: 9px; margin-top: 13px; }
+.reference-thumb,
+.reference-add { flex-basis: 78px; width: 78px; border-radius: 8px; }
+.reference-thumb { border-color: var(--line); background: var(--surface-2); }
+.reference-add { border-color: var(--line); background: var(--surface); color: var(--accent); }
+.reference-add-icon { color: var(--accent); }
+.reference-add-label { color: var(--muted); }
+.reference-remove { top: 5px; right: 5px; width: 24px; height: 24px; border-radius: 7px; }
+.composer-settings-panel { margin-top: 17px; padding: 15px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); }
+.composer-settings-panel .option-pills + .option-pills { margin-top: 17px; }
+.option-label { color: var(--muted); }
+.option-pill { border-color: var(--line); background: var(--surface); color: var(--muted); }
+.option-pill.is-active { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); }
+
+.generate-dock {
+  border-top-color: var(--line);
+  background: var(--dock-bg);
+}
+.dock-meta { color: var(--muted); font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', sans-serif; }
+.dock-meta .dock-cost { color: var(--ink); font-family: inherit; }
+/* ⚠️ 这两条**必须分开写**，不能合并成一个颜色：
+   `.cost-mark` 在 `.dock-meta`（深底）里 ⇒ 用 --lime（白）；
+   `.cta-cost` 在 `.primary-cta`（浅底 `--accent`）里 ⇒ 必须用 --on-accent（黑）。
+   原来它们被合并成一条 `{ color: var(--lime) }`，于是按钮里的价格也变成白字压白底（1.00:1）。 */
+.dock-meta .dock-cost .cost-mark { color: var(--lime); }
+.generate-cta {
+  min-height: 48px;
+  border-radius: 999px;
+}
+
+.generate-cta .spinner {
+  border-color: rgba(5, 5, 5, 0.22);
+  border-top-color: var(--on-accent);
+}
+
+/* Result and library: images lead; controls are close to the thing they act on. */
+.result-page-head { margin-bottom: 15px; }
+.result-page-head .h2 { margin-top: 7px; font-size: 24px; }
+.result-page-head .result-copy { color: var(--muted); }
+.result-stage { border: 1px solid var(--line); border-radius: 8px; background: var(--surface-2); }
+.result-stage-badge,
+.aigc-badge { border: 0; background: var(--scrim); color: #ffffff; font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', sans-serif; letter-spacing: 0; }
+.result-thumb { border-radius: 8px; background: var(--surface-2); }
+.result-thumb.is-selected { border-color: var(--accent); }
+.result-check { background: var(--accent); color: var(--on-accent); }
+.result-action-row { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 9px; margin-top: 17px; }
+.result-action { display: flex; align-items: center; justify-content: center; gap: 7px; min-height: 48px; border-radius: 8px; font-size: 13px; font-weight: 700; }
+.result-action-reference { border: 1px solid var(--line); background: var(--surface); color: var(--ink); }
+/* 分享按钮是原生 Button：微信默认按钮带 ::after 描边和 18px 字号，清掉只留 .result-action 自己的样子。 */
+button.result-action { padding: 0; margin: 0; line-height: inherit; }
+button.result-action::after { border: none; }
+.result-action-share { border: 1px solid var(--line); background: var(--surface); color: var(--ink); }
+.result-action-save { background: var(--accent); color: var(--on-accent); }
+.result-action-save.is-disabled { opacity: 0.62; }
+.result-action-icon { font-size: 16px; }
+.result-secondary-action { min-height: 44px; margin-top: 10px; color: var(--muted); font-size: 12px; line-height: 44px; text-align: center; }
+.result-saved-note { display: block; margin-top: 4px; color: var(--muted); font-size: 10px; text-align: center; }
+
+.library-overline { margin-top: 2px; }
+.library-title-row { align-items: baseline; margin-top: 5px; }
+.library-title-row .h2 { margin-top: 0; }
+.library-count { color: var(--muted); font-size: 13px; }
+.asset-filter-row { display: flex; gap: 7px; margin: 18px -18px 20px; padding: 0 var(--page-pad); overflow-x: auto; }
+.asset-filter { flex: 0 0 auto; min-height: 32px; padding: 0 11px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); color: var(--muted); font-size: 12px; line-height: 32px; }
+.asset-filter.is-active { border-color: var(--accent); background: var(--accent); color: var(--on-accent); }
+.asset-list { gap: 26px; }
+.asset-group { gap: 11px; }
+.asset-group-heading .asset-title { color: var(--ink); font-size: 15px; }
+.asset-group-heading .asset-skill { color: var(--muted); font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', sans-serif; font-size: 10px; }
+.asset-grid { gap: 9px; }
+.asset-grid .asset-img { border-radius: 8px; background: var(--surface-2); }
+.asset-hint,
+.asset-notice { color: var(--muted); font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', sans-serif; }
+.asset-notice { border-color: var(--line); border-radius: 8px; background: var(--accent-soft); }
+.asset-filter-empty { display: flex; flex-direction: column; align-items: center; gap: 6px; min-height: 180px; padding-top: 48px; color: var(--ink); font-size: 14px; text-align: center; }
+.asset-filter-empty Text:last-child { color: var(--muted); font-size: 12px; }
+
+.empty-assets { color: var(--muted); }
+.empty-assets .empty-mark { color: var(--accent); }
+.empty-assets .empty-title { color: var(--ink); }
+
+.bottom-nav {
+  border-top-color: var(--line);
+  background: var(--nav-bg);
+}
+.nav-item { color: var(--muted); font-size: 10px; }
+.nav-item.is-active { color: var(--accent); }
+
+/* ============================================================
+   14. savee 语言的落地件（首页卡片循环 / 悬浮导航 / 我的）
+   ============================================================ */
+
+/* ---- 14.1 底部导航：从「贴底横条」改成 savee 的悬浮胶囊 ----
+   原来 border-top + 通栏，是典型的「应用外壳」；savee 的导航是一条浮在
+   内容之上的胶囊，不吃版面。这里只改外观，**不改结构**：
+   BottomNav 的 reLaunch 逻辑、两项导航都保持原样（王要求保留 2 项）。 */
+.bottom-nav {
+  right: 16px;
+  left: 16px;
+  bottom: calc(var(--nav-pad) + var(--safe-b));
+  height: var(--nav-h);
+  padding: 0 var(--nav-pad);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--nav-bg);
+}
+.nav-item { border-radius: 999px; }
+
+/* ---- 14.2 首页：深色画布，图片铺到屏幕边 ----
+   savee 的首页没有左右留白 —— 图一直铺到屏幕边。所以首页**不用**
+   .page-pad，自己只让出状态栏和悬浮导航。 */
+/* 页面底部留白里**不含 `--nav-h`** —— 首页 2026-09-27 起不再放底导，
+   多算一个 70px 会在页尾留一块死空白。
+   但 `--safe-b` **必须保留**：手机底部指示条仍在。 */
+.home-dark {
+  padding: var(--safe-t) 0 calc(var(--safe-b) + var(--home-bottom-pad));
+  background: var(--bg);
+}
+
+.hd-topline {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 44px;
+  /* 右侧让出微信胶囊：custom 导航只是不画原生导航栏，**胶囊照样在**。
+     实测 393 宽屏上胶囊占 x306..384 / y58..81，而头像右对齐到 x373
+     ⇒ 不让位的话头像只从胶囊下沿露出一条 13px 的边（2026-09-22 截图实测）。
+     --capsule-r 由首页内联注入（services/system.ts 的 capsuleInsetRight）；
+     令牌块里的 0px 兜底不能少 —— 删掉它这条 calc 会解析不到变量、
+     **整条声明在计算值阶段失效**（padding-right 变 0，比不让位还糟）。
+     ⚠️ 这里**只写 var()**，不要把 20px 直接写进 calc：Taro 会把 px 转成 rpx，
+        postcss-calc 认不出 rpx 这个单位，构建会多一条警告
+        （见令牌块 --topline-pad 的注释）。 */
+  padding: 4px calc(var(--topline-pad) + var(--capsule-r)) 0 var(--topline-pad);
+}
+
+.hd-brand {
+  color: var(--ink);
+  font-size: 15px;
+  /* 深空仪器：品牌字减轻字重、拉开字距 —— 仪器面板上的刻度感，不靠粗衬存在感 */
+  font-weight: 500;
+  letter-spacing: 0.34em;
+  /* 尾部字距会让视觉重心偏左，补回一半字距让它光学居中 */
+  margin-right: -0.17em;
+}
+
+/* 头像入口 —— 王指定：「我的」从首页右上角头像进去 */
+.hd-avatar {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  border: 1px solid var(--line);
+  border-radius: 50%;
+  background: var(--surface-2);
+  color: var(--ink);
+  font-size: 14px;
+}
+
+/* ---- 14.3 卡片循环 ----
+   王的原话：「带有动效的卡片循环，点击即可进入相应的模板制作，当前点击到的
+   图片有轻微的放大效果，两侧的图片轻微的闪避效果」。
+   用 swiper 的 previous-margin / next-margin 露出两侧（这是原生支持，
+   不需要自己算滚动位置），circular 实现「循环」。
+   ⚠️ margin 用 rpx 而不是 px：rpx 是小程序原生单位，不会被 Taro 的
+      pxtransform 二次换算；用 px 的话换算行为依赖构建配置，容易算错。
+      750 - 450 = 300，两侧各 150rpx ⇒ 卡片占屏宽 60%。 */
+.hd-stage { margin-top: 14px; }
+
+.hd-swiper { height: 356px; }
+
+.hd-card {
+  position: relative;
+  width: 236px;
+  height: 354px;
+  margin: 0 auto;
+  overflow: hidden;
+  border-radius: 6px;
+  background: var(--surface-2);
+  transition: transform 280ms cubic-bezier(0.22, 0.61, 0.36, 1);
+}
+
+.hd-card-image { width: 100%; height: 100%; }
+
+/* 压在卡片下沿的渐隐，只为了让白字在浅色图上也可读 ——
+   不做整屏 scrim，savee 的标题是直接压在图上、无蒙层的。 */
+.hd-card-veil {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  height: 96px;
+  background: linear-gradient(to top,
+    rgba(0, 0, 0, 0.72) 0%,
+    rgba(0, 0, 0, 0.55) 30%,
+    rgba(0, 0, 0, 0) 100%);
+}
+
+.hd-card-name {
+  position: absolute;
+  right: 14px;
+  bottom: 12px;
+  left: 14px;
+  color: #ffffff;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.hd-caption {
+  margin-top: 12px;
+  padding: 0 44px;
+  text-align: center;
+}
+
+.hd-name {
+  display: block;
+  color: var(--ink);
+  font-size: 21px;
+  font-weight: 600;
+}
+
+.hd-skill {
+  display: block;
+  margin-top: 6px;
+  color: var(--muted);
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+/* 细进度条 —— 2026-09-27 取代原来的「一张卡一个圆点」。
+   原写法是 `.hd-dots` + 每张卡一个 5px 圆点；白名单落地后轮播 13 张
+   ⇒ 13 个点、整行约 137px。**当前项只靠颜色区分，
+   在 13 个 4px 点里根本看不出来是第几张** —— 指示器失效。
+   进度条把「第几张」变成连续量。 */
+.hd-progress {
+  width: 120px;
+  height: 2px;
+  margin: 10px auto 0;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.16);
+  overflow: hidden;
+}
+
+.hd-progress-fill {
+  height: 100%;
+  border-radius: 999px;
+  background: var(--ink);
+  transition: width 280ms cubic-bezier(0.22, 0.61, 0.36, 1);
+}
+
+/* 首屏之下的次要内容（快速创作、创作方式、新功能） */
+.home-dark .home-intro { padding: 24px 20px 10px; }
+.home-dark .home-composer-card { margin: 0 20px; }
+.home-dark .home-workflows { padding: 0 20px; }
+/* ---- 14.4 「我的」页 ----
+   王指定内容：账号信息 + 点数 + 充值。入口是首页右上角头像。
+   布局照 savee 的 profile 页：无标题栏、头像居中、下面一行四列统计。 */
+.me-page {
+  padding: 0 0 calc(var(--page-pad-b) + var(--safe-b));
+  background: var(--bg);
+}
+
+.me-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 44px;
+  padding: var(--safe-t) 20px 0;
+}
+
+.me-back {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  border: 1px solid var(--line);
+  border-radius: 50%;
+  color: var(--ink);
+  font-size: 14px;
+}
+
+.me-identity {
+  padding: 22px 20px 0;
+  text-align: center;
+}
+
+.me-avatar {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 72px;
+  height: 72px;
+  margin: 0 auto;
+  border: 1px solid var(--line);
+  border-radius: 50%;
+  background: var(--surface-2);
+  color: var(--ink);
+  font-size: 26px;
+}
+
+.me-name {
+  display: block;
+  margin-top: 14px;
+  color: var(--ink);
+  font-size: 19px;
+  font-weight: 600;
+}
+
+.me-sub {
+  display: block;
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+/* 四列统计：savee 的 profile 就是这样一行，数字在上、标签在下 */
+.me-stats {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  margin-top: 22px;
+  padding: 0 8px;
+}
+
+.me-stat { text-align: center; }
+
+.me-stat-value {
+  display: block;
+  color: var(--ink);
+  font-size: 17px;
+  font-weight: 600;
+}
+
+.me-stat-label {
+  display: block;
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.me-balance-card {
+  margin: 26px 20px 0;
+  padding: 18px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
+}
+
+/* 「我的资产」入口（2026-09-27）。
+   背景：首页撚掉底导后，`/pages/assets/index` 全项目唯一的入口没了
+   —— 实测那一页只被 `app.config.ts`（路由注册）和 `data/app-nav.ts`
+   （底导数据源）引用，**没有任何跳转指向它**。王定：放进「我的」。
+   样式跟 `.me-balance-card` 同一套语言（同边框 / 圆角 / 底色）。 */
+.me-assets-entry {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 52px;
+  margin: 12px 20px 0;
+  padding: 0 18px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
+}
+
+.me-assets-label { color: var(--ink); font-size: 14px; }
+.me-assets-arrow { color: var(--muted); font-size: 18px; line-height: 1; }
+
+.me-balance-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.me-balance-value {
+  color: var(--ink);
+  font-size: 38px;
+  font-weight: 600;
+  line-height: 1;
+}
+
+.me-balance-unit { color: var(--muted); font-size: 13px; }
+
+.me-balance-note {
+  display: block;
+  margin-top: 10px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.me-recharge {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 46px;
+  margin-top: 16px;
+  border-radius: 8px;
+  background: var(--accent);
+  color: var(--on-accent);
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.me-section-title {
+  display: block;
+  margin: 30px 20px 12px;
+  color: var(--muted);
+  font-size: 11px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.me-record {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 13px 20px;
+  border-top: 1px solid var(--line);
+}
+
+.me-record-title { color: var(--ink); font-size: 13px; }
+.me-record-time { display: block; margin-top: 3px; color: var(--muted); font-size: 11px; }
+
+.me-record-amount { color: var(--ink); font-size: 14px; font-weight: 600; }
+.me-record-amount.is-pending { color: var(--muted); }
+
+.me-empty {
+  padding: 20px;
+  color: var(--muted);
+  font-size: 12px;
+  text-align: center;
+}
+
+/* ============================================================
+   15.（已删除）浅色变体
+   ------------------------------------------------------------
+   2026-09-22 21:2x 王定：**深色无条件默认**，不再跟随系统。
+   这里原来是一整段 `@media (prefers-color-scheme: light) { page { ... } }`，
+   现在整段删掉了。保留这段墓碑注释，是为了让下一个人知道
+   「浅色不是漏了，是被决定掉的」，并且知道重新加回来要连带做什么：
+
+   ⚠️ 重新加浅色变体时，**必须同时**：
+     ① 在 app.json 打开 `"darkmode": true` 并配 `themeLocation` 指向 theme.json；
+     ② 在 theme.json 里给 `navigationBarTextStyle` 定义 light/dark 两套值。
+   否则状态栏文字颜色是静态的 —— 浅色下会变成白字压浅底（这次实测到的 bug）。
+   ============================================================ */
+
+/* ============================================================
+   16. 灵感复刻（pages/create-reference）
+   ------------------------------------------------------------
+   版面的主语是**两张输入素材**，所以：
+     · 上传槽比别处高（150px），给「这就是我要的图」足够存在感；
+     · 两个槽位的角色靠**文字**区分（标题 / 空状态说明 / 删除按钮文案），
+       不靠颜色 —— 读屏、低对比度、黑白截图都必须分得清；
+     · 「保留什么？」是这一页唯一的强选择，胶囊抬到 44px 并带 ✓；
+     · 权利确认是**生成前的**一步，不藏在请求后面。
+   刻意不复制旧首页的卡片网格：这一页没有网格。
+   ============================================================ */
+
+.composer-block {
+  margin-top: 26px;
+}
+
+.composer-block .upload-slot {
+  min-height: 150px;
+}
+
+/* 空状态的第二行说明：承担「这个槽位是干什么的」，是区分两个槽位的主力 */
+/* ⚠️ max-width 从 82% 提到 92%（2026-09-27）：灵感复刻的两个槽改成**并排**后
+   每个只有 173px 宽，82% = 142px，而「正面、清晰、背景干净的产品照」要 154px
+   ⇒ 断成「…干净的产」/「品照」，第二行只剩两个字（寡行）。
+   92% = 159px 刚好容得下 14 个字。
+   全宽场景（产品工作室的槽是 356px）本来就一行放得下，不受影响。 */
+.upload-slot .slot-hint {
+  max-width: 92%;
+  margin-top: 7px;
+  color: #8b938c;
+  font-size: 11px;
+  line-height: 1.45;
+  text-align: center;
+}
+
+/* 已填状态的删除：不是裸「×」，而是**带字的按钮** ——
+   两个槽位的文案不同，读屏与截图都能分辨删的是哪一张。 */
+.upload-slot .slot-remove {
+  position: absolute;
+  right: 9px;
+  bottom: 9px;
+  display: flex;
+  align-items: center;
+  min-height: 44px;
+  padding: 0 14px;
+  border: 1px solid #4a5250;
+  border-radius: 8px;
+  background: rgba(5, 5, 5, 0.74);
+  color: #e6eae4;
+  font-size: 12px;
+}
+
+.composer-block-note {
+  display: block;
+  margin-top: 9px;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+/* 「还差什么才能生成」：压在对应字段下面。中性偏暖，不是报错色 ——
+   前置条件没齐是正常状态，不是用户做错了。 */
+.composer-blocker {
+  display: block;
+  margin-top: 6px;
+  color: #e8c07a;
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+/* ---- 「保留什么？」/「画面比例」：本页的强选择 ---- */
+
+.composer-choice {
+  margin-top: 28px;
+  padding: 16px 14px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
+}
+
+.composer-choice-title {
+  display: block;
+  color: var(--ink);
+  font-size: 17px;
+  font-weight: 700;
+}
+
+.composer-choice-copy {
+  display: block;
+  margin-top: 6px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+/* 把通用的「标签在左、胶囊贴右」改成「标签在上、胶囊占满一行」，
+   并把胶囊抬到 44px —— 这一页它是主控件，不是设置项。
+   ⚠️ 只在本页作用域内改，.option-row 的全局外观一字不动。 */
+.composer-choice .option-row {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 9px;
+  margin-top: 14px;
+}
+
+.composer-choice .option-pills {
+  justify-content: flex-start;
+}
+
+.composer-choice .option-pills .pill {
+  display: flex;
+  align-items: center;
+  min-height: 44px;
+  padding: 0 14px;
+  border-radius: 8px;
+  font-size: 13px;
+}
+
+/* ---- 权利确认 ---- */
+
+.recreate-rights {
+  margin-top: 28px;
+  padding: 12px 14px 6px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface-2);
+}
+
+.recreate-rights-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 11px;
+}
+
+/* 44px 命中区包着 22px 视觉方块：点得准，看起来不笨重 */
+.recreate-rights-hit {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 44px;
+  height: 44px;
+}
+
+.recreate-rights-box {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border: 1px solid #5a625f;
+  border-radius: 6px;
+  background: var(--surface);
+}
+
+.recreate-rights-box.is-checked {
+  border-color: var(--accent);
+  background: var(--accent);
+}
+
+.recreate-rights-tick {
+  color: var(--on-accent);
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.recreate-rights-label {
+  flex: 1;
+  padding: 11px 0;
+  color: var(--ink);
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.recreate-rights-link {
+  display: flex;
+  align-items: center;
+  min-height: 44px;
+  margin-left: 55px;
+  color: var(--accent);
+  font-size: 12px;
+}
+
+/* ── 灵感复刻改成三层卡结构后新增（2026-09-27） ─────────────────────
+   这一页原来是一串平铺块（每块一个 eyebrow + 25px `.h2` 标题），实测内容
+   总高 1432.7px / 视口 844 ⇒ 约 1.9 屏；「保留什么？」在 815.4px，被 719px
+   起的生成条**整块盖住**；法务勾选在 1412.8px，要滚 1.7 屏才够得到。
+   现在与自由生图 / 字段式海报同构：`input-card`（创作输入）+
+   `settings-card`（输出设置），法务声明留在两张卡之外。 */
+
+/* 「保留什么？」从独立卡片改成 input-card 里的一个区块：
+   去掉它自己的边框与底色（不然是「卡中卡」），
+   **保留 17px 标题 + 44px 胶囊的强样式** —— 它是这一页唯一的创作选择，
+   不是输出设置（王 2026-09-27 定）。
+   ⚠️ `.composer-choice .option-pills .pill` 那几条是后代选择器，不受影响。 */
+/* 卡片里的分区标题：第一个不加上边距（卡片的 padding 已经给了），
+   后面的要和上一块拉开 —— 否则「补充说明」会贴着「保留什么？」的胶囊。
+   ⚠️ 用 `:first-child` 而不是相邻兄弟选择器（`.composer-choice + .composer-section-title`）：
+      兄弟选择器依赖两块的前后顺序，一换序就**静默失效**（间距消失，不报错）。
+   ⚠️ 对 create-poster / create-freeform 无影响：它们的 `.composer-section-title`
+      都是所在容器里的第一个子节点 ⇒ 上边距仍是 0。 */
+.input-card .composer-section-title {
+  margin-top: 22px;
+}
+
+.input-card .composer-section-title:first-child {
+  margin-top: 0;
+}
+
+.input-card .composer-choice {
+  margin-top: 20px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+
+/* `.upload-grid` 原来只在 SCSS 里定义、**没有任何页面用它**（死类）。
+   现在两个上传槽并排用它。卡片里标题已经有 12px 下边距，
+   再叠 `.upload-grid` 自己的 14px 会变成 26px —— 收掉。 */
+.input-card .upload-grid {
+  margin-top: 0;
+}
+
+/* 补充说明不是这张卡的主角（不像自由生图那样整张卡就是输入框），
+   所以不吃 `.composer-surface .prompt-field` 的 14px 内缩 ——
+   那会让它的左边线比上面的上传槽多缩进 14px，对不齐。
+   ⚠️ 特异性 0,4,0 > `.composer-surface .prompt-field` 的 0,2,0。 */
+.input-card.composer-surface .reference-note.prompt-field {
+  padding: 0;
+}
+
+/* 「输出设置」面板里的一行说明。`OptionPills` 只有 label，没有地方放解释文案，
+   而灵感复刻的「画面比例」需要那句「构图是从参考图借来的，所以比例会影响它
+   是否被裁掉」—— 它解释了「为什么改了比例构图会变」，不能丢。 */
+.settings-note {
+  display: block;
+  margin-top: 10px;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+
+/* ---- 生成条上的「未就绪」说明（与 .generate-error 同位，但不是错误） ---- */
+
+.generate-hint {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 8px);
+  left: 0;
+  padding: 9px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  background: rgba(10, 13, 15, 0.96);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+/* ---- 点数不足 → 去充值（2026-09-27） ----
+   整行可点，跳充值页。信号青只落在「去充值 →」上，
+   左边文案保持正文色 —— 一行里只有一个视觉出口。 */
+.generate-recharge {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 8px);
+  left: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 14px;
+  border: 1px solid var(--accent-line);
+  border-radius: var(--r-sm);
+  background: rgba(10, 13, 15, 0.96);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+}
+
+.generate-recharge .recharge-text {
+  color: var(--ink);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.generate-recharge .recharge-go {
+  flex-shrink: 0;
+  color: var(--signal);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+/* ============================================================
+   P0 生成页重组、首页触感与本地参考图入口
+   ============================================================ */
+.composer-scroll {
+  padding: 0 0 calc(var(--dock-h) + var(--dock-gap));
+}
+
+.input-card {
+  margin-bottom: 14px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface);
+}
+
+.input-card.composer-surface { overflow: visible; }
+
+.input-card .composer-toolbar {
+  margin: 14px -14px -14px;
+  border-radius: 0 0 12px 12px;
+}
+
+.reference-images-inline {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.reference-images-inline .composer-section-title { width: 100%; }
+.reference-images-inline .reference-grid { width: 100%; margin-top: 0; }
+
+.reference-thumb,
+.reference-add-inline {
+  position: relative;
+  width: 64px;
+  height: 64px;
+  flex: 0 0 64px;
+  overflow: hidden;
+  border-radius: 8px;
+}
+
+.reference-thumb .reference-preview {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.reference-add-inline {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  border: 1px dashed var(--line);
+  background: var(--surface-2);
+  color: var(--muted);
+}
+
+.reference-add-inline .reference-add-icon {
+  color: var(--ink);
+  font-size: 20px;
+  line-height: 1;
+}
+
+.reference-add-inline .reference-add-label {
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1;
+}
+
+/* 首页快速创作的参考图入口：两态共享命中区，选中时不跳布局。 */
+.composer-ref-add,
+.composer-ref-thumb {
+  position: relative;
+  width: 42px;
+  height: 42px;
+  border-radius: 8px;
+}
+
+.composer-ref-add {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  border: 1px dashed var(--line);
+  background: var(--surface-2);
+}
+
+.composer-ref-plus {
+  color: var(--ink);
+  font-size: 15px;
+  line-height: 1;
+}
+
+.composer-ref-label {
+  color: var(--muted);
+  font-size: 9px;
+  line-height: 1;
+}
+
+.composer-ref-thumb {
+  overflow: hidden;
+  border: 1px solid var(--line);
+}
+
+.composer-ref-image {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.composer-ref-remove {
+  position: absolute;
+  top: 0;
+  right: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-bottom-left-radius: 8px;
+  background: rgba(5, 5, 5, 0.72);
+  color: var(--ink);
+  font-size: 13px;
+  line-height: 1;
+}
+
+.suggestions-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 40px;
+  margin-top: 12px;
+  padding: 0 11px;
+  border-radius: 8px;
+  background: var(--surface-2);
+  color: var(--ink);
+  font-size: 12px;
+}
+
+.toggle-arrow { color: var(--muted); font-size: 11px; }
+
+.suggestions-inline {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 9px;
+}
+
+.suggestion-chip {
+  min-height: 32px;
+  padding: 0 11px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface-2);
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 32px;
+}
+
+.settings-card {
+  margin-bottom: 16px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface-2);
+}
+
+.settings-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 34px;
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.settings-badge {
+  max-width: 72%;
+  overflow: hidden;
+  padding: 5px 8px;
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.composer-settings-panel {
+  max-height: 0;
+  margin-top: 0;
+  padding: 0;
+  overflow: hidden;
+  border: 0;
+  opacity: 0;
+  transition: max-height 300ms cubic-bezier(0.22, 0.61, 0.36, 1),
+              margin-top 300ms cubic-bezier(0.22, 0.61, 0.36, 1),
+              padding 300ms cubic-bezier(0.22, 0.61, 0.36, 1),
+              opacity 200ms ease-out;
+}
+
+.composer-settings-panel.is-expanded {
+  max-height: 800px;
+  margin-top: 12px;
+  padding: 13px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  opacity: 1;
+}
+
+.composer-settings-panel .option-pills + .option-pills { margin-top: 17px; }
+
+.hd-card {
+  transition: transform 200ms cubic-bezier(0.22, 0.61, 0.36, 1),
+              box-shadow 200ms ease-out;
+}
+
+.hd-card.is-hovered {
+  transform: translateY(-2px);
+  box-shadow: 0 8px 16px rgba(0, 0, 0, 0.3);
+}
+
+.hd-card-content {
+  width: 100%;
+  height: 100%;
+  transition: transform 280ms cubic-bezier(0.22, 0.61, 0.36, 1);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .page-enter,
+  .skeleton-pulse,
+  .spinner { animation: none; }
+
+  .primary-cta,
+  .secondary-button,
+  .hd-card,
+  .hd-card-content,
+  .composer-settings-panel { transition: none; }
+}
+
+/* ============================================================
+   分享落地迎接横幅（2026-09-27）
+   from=share 进首页时展示一次：左文案、右行动点（信号青）、最右 ×。
+   跟 generate-recharge 同一套语言：发丝描边 + 深空底 + 单一视觉出口。
+   ============================================================ */
+.share-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 8px 20px 0;
+  padding: 10px 8px 10px 14px;
+  border: 1px solid var(--accent-line);
+  border-radius: var(--r-sm);
+  background: rgba(10, 13, 15, 0.96);
+}
+
+.share-banner-text {
+  flex: 1;
+  color: var(--ink);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.share-banner-cta {
+  flex-shrink: 0;
+  color: var(--signal);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.share-banner-close {
+  flex-shrink: 0;
+  padding: 2px 6px;
+  color: var(--faint);
+  font-size: 15px;
+  line-height: 1;
+}
