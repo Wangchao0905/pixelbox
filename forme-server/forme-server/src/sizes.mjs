@@ -35,8 +35,13 @@ import { badRequest } from './http.mjs'
  * 测试套件对着干 —— 那种时候该改的是规则，不是把测试改成迁就规则。
  */
 export const MIN_EDGE = 64
-/** 单边上限。这是**成本/被滥用**的界，不是「上游支持的界」，将来要放宽改这一行 */
-export const MAX_EDGE = 2048
+/**
+ * 单边上限。**这是个体检项，不是产品口径** —— 2026-09-29 起证件照放大支持
+ * 4K 档（2730x4096），上游 gpt-image-2.5-sunburst-c 按尺寸分档计费（1k/2k/4k），
+ * 实测 size 参数直接透传即按尺寸走对应分组价格，所以上限提到 4096。
+ * 计费是按**张×档位**算的（见 image.mjs RESOLUTION_TIERS），成本不在平台身上裸奔。
+ */
+export const MAX_EDGE = 4096
 
 /** 客户端没带 size 时用（4:5），与海报页的默认方向一致 */
 export const DEFAULT_SIZE = '1024x1280'

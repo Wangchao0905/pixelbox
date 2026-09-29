@@ -120,6 +120,37 @@ export function costForImages(count: number): number {
   return Number((count * currentImageCost()).toFixed(2))
 }
 
+/**
+ * 清晰度档位（2026-09-29）：证件照「放大单张」专用三档。
+ * 展示文案与点数**以服务端 /api/catalog 下发的 tierPricing 为准**，
+ * 本地倍率只是没联网时的兜底 —— 和 imageCost 的缓存策略同一条道理。
+ */
+export type ResolutionTier = '1k' | '2k' | '4k'
+
+export const RESOLUTION_TIERS: Array<{
+  tier: ResolutionTier
+  label: string
+  desc: string
+  /** 相对单张基准价的倍率（兜底用，服务端下发优先） */
+  mult: number
+}> = [
+  { tier: '1k', label: '标清', desc: '1024px · 快速出图', mult: 1 },
+  { tier: '2k', label: '高清', desc: '2048px · 细节更锐', mult: 1.25 },
+  { tier: '4k', label: '超清', desc: '4096px · 打印级', mult: 1.75 }
+]
+
+let cachedTierPricing: Record<string, number> | null = null
+
+/** 某档位的单张点数：服务端下发优先，否则按基准价×倍率兜底 */
+export function costForTier(tier: ResolutionTier): number {
+  const fromServer = cachedTierPricing?.[tier]
+  if (Number.isFinite(fromServer) && (fromServer as number) > 0) {
+    return fromServer as number
+  }
+  const def = RESOLUTION_TIERS.find((t) => t.tier === tier)
+  return Number((currentImageCost() * (def?.mult ?? 1)).toFixed(2))
+}
+
 /* ================================================================
    AIGC 显式标识
    ================================================================
@@ -156,10 +187,19 @@ export function aigcBadgeText(): string {
  */
 function absorbServerPolicy(payload: {
   imageCost?: number
+  tierPricing?: Record<string, number>
   aigc?: { label?: string; provider?: string }
 }) {
   if (Number.isFinite(payload?.imageCost) && (payload.imageCost as number) > 0) {
     cachedImageCost = payload.imageCost as number
+  }
+  const tp = payload?.tierPricing
+  if (tp && typeof tp === 'object') {
+    const clean: Record<string, number> = {}
+    for (const [k, v] of Object.entries(tp)) {
+      if (Number.isFinite(v) && (v as number) > 0) clean[k] = v as number
+    }
+    if (Object.keys(clean).length) cachedTierPricing = clean
   }
   const label = payload?.aigc?.label
   const provider = payload?.aigc?.provider

@@ -3,7 +3,7 @@ import { Button, Image, Text, View } from '@tarojs/components'
 import Taro, { useShareAppMessage, useShareTimeline } from '@tarojs/taro'
 import { AppHeader, OptionPills, PrivacyGate } from '@/components'
 import { editImages, generateImages, saveImageToAlbum } from '@/services/image-api'
-import { aigcBadgeText, costForImages } from '@/services/account'
+import { aigcBadgeText, costForImages, costForTier, RESOLUTION_TIERS, type ResolutionTier } from '@/services/account'
 import { shortfallOf } from '@/services/api-error'
 import { BATCH_SIZE, defaultConfigForRatio } from '@/data/catalog'
 import { portraitThemeById } from '@/package-portrait/data/portrait-themes'
@@ -71,6 +71,8 @@ export default function Result() {
   const gridTheme = gridPick ? portraitThemeById(gridPick.themeId) : undefined
   const canEnlarge = Boolean(gridPick && gridTheme?.buildSinglePrompt && result?.rerun)
   const [cellIndex, setCellIndex] = useState(0)
+  /** 清晰度档位：默认标清 1k。服务端按档位重写尺寸并按档位计费，客户端只传档位名。 */
+  const [tier, setTier] = useState<ResolutionTier>('1k')
   const [enlarging, setEnlarging] = useState(false)
 
   const handleEnlarge = async () => {
@@ -86,7 +88,9 @@ export default function Result() {
       const params = {
         ...base,
         prompt,
-        // 单张用 2:3 竖构图：标准证件照比例，比正方形更适合保存打印
+        // 清晰度档位：服务端按档位表重写尺寸（1k=1024x1536 / 2k=1365x2048 / 4k=2730x4096）
+        // 并按档位计费；这里的 size 只当没档位时的兜底，正常不会被用到。
+        tier,
         size: defaultConfigForRatio('2:3').size,
         n: 1,
         // 第一张 = 自拍（身份基准），第二张 = 四宫格（编号选格基准）；
@@ -103,7 +107,7 @@ export default function Result() {
       })
       Taro.redirectTo({ url: '/pages/result/index' })
     } catch (cause) {
-      const need = shortfallOf(cause, costForImages(1))
+      const need = shortfallOf(cause, costForTier(tier))
       if (need != null) {
         const answer = await Taro.showModal({
           title: '点数不足',
@@ -348,6 +352,16 @@ export default function Result() {
             showSelectedMark
             onChange={(value) => setCellIndex(Number(value))}
           />
+          <OptionPills
+            label='清晰度'
+            value={tier}
+            options={RESOLUTION_TIERS.map((t) => ({
+              value: t.tier,
+              label: `${t.label} ${costForTier(t.tier)}点`
+            }))}
+            showSelectedMark
+            onChange={(value) => setTier(value as ResolutionTier)}
+          />
           <View
             className={`primary-cta result-enlarge ${enlarging ? 'is-disabled' : ''}`}
             hoverClass={enlarging ? 'none' : 'is-pressed'}
@@ -355,11 +369,13 @@ export default function Result() {
           >
             {enlarging ? <View className='spinner' /> : null}
             <Text>
-              {enlarging ? '生成中…' : `放大第 ${cellIndex + 1} 格（${costForImages(1)} 点）`}
+              {enlarging
+                ? '生成中…'
+                : `放大第 ${cellIndex + 1} 格 · ${RESOLUTION_TIERS.find((t) => t.tier === tier)?.label}（${costForTier(tier)} 点）`}
             </Text>
           </View>
           <Text className='result-grid-note'>
-            按编号从四宫格中取出该格，生成全分辨率单张，身份保持不变。
+            按编号从四宫格中取出该格重出单张：标清 1024px 快速出图，高清 2048px 细节更锐，超清 4096px 打印级。
           </Text>
         </View>
       ) : null}

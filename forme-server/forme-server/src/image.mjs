@@ -167,9 +167,35 @@ async function mockImages({ userId, prompt, size, n, baseUrl }) {
 }
 
 /**
+ * 清晰度档位表（2026-09-29）：上游 gpt-image-2.5-sunburst-c 按输出尺寸分档计费
+ * （n1n.ai 分组价：1k $0.0235 / 2k $0.0294 / 4k $0.0441，实测 size 参数透传即按尺寸计费）。
+ * ------------------------------------------------------------------
+ * 安全设计：档位 → 尺寸、档位 → 价格**都在服务端定**，客户端只传档位名。
+ * 客户端传了 4k 的 size、只想付 1k 的钱 —— 这种请求在这里直接按档位重算，
+ * size 以档位表为准重写，不存在「低价买高清」的口子。
+ * 目前只有证件照「放大单张」用档位（固定 2:3 构图），其他流程不传 tier，
+ * 走原来的 size 逻辑，一点不受影响。
+ */
+export const RESOLUTION_TIERS = {
+  '1k': { size: '1024x1536', costMult: 1 },
+  '2k': { size: '1365x2048', costMult: 1.25 },
+  '4k': { size: '2730x4096', costMult: 1.75 }
+}
+
+/** 档位单价表（供 /api/catalog 下发，客户端只做展示，扣费以服务端计算为准） */
+export function tierPricing() {
+  const out = {}
+  for (const [tier, def] of Object.entries(RESOLUTION_TIERS)) {
+    out[tier] = Number((config.imageCost * def.costMult).toFixed(2))
+  }
+  return out // { '1k': 0.4, '2k': 0.5, '4k': 0.7 }（IMAGE_COST=0.4 时）
+}
+
+/**
  * 生成或编辑图片，含扣费与幂等。
  * @param {object} options
  * @param {string} options.kind 'generate' | 'edit'
+ * @param {string} [options.tier] 清晰度档位 '1k'|'2k'|'4k'，传了则尺寸与单价都按档位表走
  */
 export async function runImageTask({
   kind = 'generate',
@@ -184,12 +210,17 @@ export async function runImageTask({
   inputImages = [],
   asset = null,
   baseUrl = '',
-  background = undefined
+  background = undefined,
+  tier = undefined
 }) {
   if (!prompt?.trim()) throw badRequest('提示词不能为空', 'missing_prompt')
   // background 只认 'transparent'：这是目前唯一对外暴露的取值，
   // 其他值（opaque/auto）等于没传，不让它进上游。
   const cleanBackground = background === 'transparent' ? 'transparent' : undefined
+
+  // 档位校验：非法档位直接 400，不静默降级（静默降级 = 用户以为买了 4K 拿到 1K）
+  const tierDef = tier == null ? null : RESOLUTION_TIERS[String(tier).trim()]
+  if (tier != null && !tierDef) throw badRequest(`不支持的清晰度档位：${tier}`, 'invalid_tier')
 
   const batch = clampBatch(n)
   /**
@@ -197,8 +228,10 @@ export async function runImageTask({
    * 位置和「限流必须在 reserveCharge 之前」是同一条道理：用户不该为一次
    * 注定失败的请求付钱。放这里还有一个好处 —— 上游拿到的一定是契约内的值，
    * 不会出现「客户端传了 '1:1' 就原样透传出去」。
+   *
+   * 有档位时尺寸以档位表为准重写（防「低价买高清」）；无档位走原来的 size 逻辑。
    */
-  const resolvedSize = normalizeSize(size)
+  const resolvedSize = tierDef ? tierDef.size : normalizeSize(size)
   const key = idempotencyKey(userId, requestId, kind)
 
   // 1. 幂等：网络超时后客户端重试，不应重复出图、重复扣费
@@ -211,7 +244,9 @@ export async function runImageTask({
   await guardText(prompt, openid, kind === 'edit' ? 'edit-prompt' : 'prompt')
 
   // 3. 预扣（余额校验与扣款在同一次同步写内完成）
-  const charge = Number((batch * config.imageCost).toFixed(2))
+  // 有档位时单价按档位倍率走：0.4 → 2k=0.5 / 4k=0.7（IMAGE_COST=0.4 时）
+  const unitCost = tierDef ? config.imageCost * tierDef.costMult : config.imageCost
+  const charge = Number((batch * unitCost).toFixed(2))
   const hold = await reserveCharge(userId, charge, {
     type: kind,
     title: kind === 'edit' ? '产品替换' : '图片生成',

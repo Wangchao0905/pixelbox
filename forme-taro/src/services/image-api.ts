@@ -44,6 +44,11 @@ export type GenerateParams = {
   size: string
   n?: number
   asset?: AssetMeta
+  /**
+   * 清晰度档位（'1k'|'2k'|'4k'）：证件照「放大单张」专用。
+   * 传了之后服务端按档位表重写尺寸并按档位计费，忽略这里的 size。
+   */
+  tier?: '1k' | '2k' | '4k'
 }
 
 export type EditParams = GenerateParams & {
@@ -197,7 +202,8 @@ export async function generateImages(params: GenerateParams): Promise<GeneratedI
     quality: params.quality,
     size: params.size,
     n,
-    asset: params.asset
+    asset: params.asset,
+    ...(params.tier ? { tier: params.tier } : {})
   })
 
   syncBalance(payload)
@@ -234,7 +240,8 @@ export async function editImages(params: EditParams): Promise<GeneratedImage[]> 
     n,
     fileIds,
     asset: params.asset,
-    ...(params.background ? { background: params.background } : {})
+    ...(params.background ? { background: params.background } : {}),
+    ...(params.tier ? { tier: params.tier } : {})
   })
 
   syncBalance(payload)

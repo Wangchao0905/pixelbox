@@ -22,7 +22,7 @@ import {
   listAssets,
   listTransactions
 } from './store.mjs'
-import { loadInputImages, runImageTask } from './image.mjs'
+import { loadInputImages, runImageTask, tierPricing } from './image.mjs'
 import { DEFAULT_SIZE } from './sizes.mjs'
 import { assertWithinLimit, clientIp } from './ratelimit.mjs'
 import {
@@ -136,6 +136,11 @@ async function handleCatalog(ctx) {
     plans: sellablePlans({ includeTest }),
     imageCost: config.imageCost,
     maxBatch: config.maxBatch,
+    /**
+     * 清晰度档位单价表（2026-09-29）：{ '1k': 0.4, '2k': 0.5, '4k': 0.7 }。
+     * 客户端只做展示用，实际扣费以 runImageTask 的服务端计算为准。
+     */
+    tierPricing: tierPricing(),
     /** 有效期道具的标准天数，客户端展示文案用 */
     passDays: PASS_DAYS,
     /**
@@ -229,7 +234,10 @@ async function handleGenerate(ctx) {
     n: batchOf(body),
     requestId: requestIdOf(ctx, body),
     asset: body.asset ?? null,
-    baseUrl: ctx.baseUrl
+    baseUrl: ctx.baseUrl,
+    // 清晰度档位（'1k'|'2k'|'4k'）：只有证件照放大在用。runImageTask 里校验，
+    // 非法档位直接 400；合法档位则尺寸与单价都按服务端档位表走，忽略客户端 size。
+    tier: body.tier ?? undefined
   })
 }
 
@@ -261,7 +269,9 @@ async function handleEdit(ctx) {
     asset: body.asset ?? null,
     baseUrl: ctx.baseUrl,
     // 只有 'transparent' 会被透传给上游，其他值在 runImageTask 里洗掉
-    background: body.background
+    background: body.background,
+    // 清晰度档位：同上，证件照放大单张用
+    tier: body.tier ?? undefined
   })
 }
 
